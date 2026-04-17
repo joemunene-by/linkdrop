@@ -37,7 +37,7 @@ If these are critical to you, you need a Mac in the loop. If they're not, linkdr
 
 ## Install the backing tools
 
-linkdrop drives the standard Linux iPhone toolchain. Install once:
+### Runtime tools (required to use linkdrop)
 
 ```bash
 sudo apt install libimobiledevice-utils ifuse usbmuxd uxplay
@@ -47,6 +47,16 @@ sudo apt install libimobiledevice-utils ifuse usbmuxd uxplay
 - `ifuse` — FUSE mount of the iPhone's filesystem (for photo browsing)
 - `usbmuxd` — daemon that handles USB ↔ iPhone communication
 - `uxplay` — AirPlay 2 mirror receiver
+
+### Build dependencies (required to compile from source)
+
+Tauri needs GTK + WebKit + a C toolchain on Linux:
+
+```bash
+sudo apt install build-essential curl wget file libssl-dev \
+  libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
+  libayatana-appindicator3-dev librsvg2-dev
+```
 
 After installing, plug your iPhone in and tap **Trust** when it prompts.
 
