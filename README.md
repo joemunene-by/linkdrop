@@ -26,11 +26,9 @@ No Mac bridge. No jailbreak. No cloud.
 
 All core ops run via USB. iPhone just needs to be plugged in and trusted.
 
-## Wi-Fi sync status
+## Wi-Fi sync
 
-Linkdrop supports Wi-Fi *discovery* via a sidecar `netmuxd` daemon: once you click **Enable Wi-Fi sync** in the Device panel while USB-connected, the iPhone shows up in the device picker with a `Wi-Fi` tag whenever it's on the same LAN — no cable needed for detection.
-
-**Current Wi-Fi ops gap**: `ideviceinfo` / `ifuse` / `idevicescreenshot` go through `libimobiledevice` + `netmuxd`'s mux protocol; `netmuxd`'s TCP-host mode only partially implements the `Listen`/`Connect` handlers those tools rely on. Concretely, the Wi-Fi-tagged device appears in the picker but Device Info / Photos / Screenshot will error with `Mux error (-8)` until the device is USB-tethered. The planned fix is to spawn `pymobiledevice3` (pure-Python, native Wi-Fi support) for the Wi-Fi transport instead of libimobiledevice.
+Click **Enable Wi-Fi sync** in the Device panel while USB-connected (one-time setup — flips iPhone's `EnableWifiConnections` lockdown flag via the [idevice](https://crates.io/crates/idevice) crate). After that, linkdrop talks to the iPhone through `pymobiledevice3` whenever the device is on the same LAN: Device Info, Screenshot, Apps listing, and Photos browsing all work cableless. Developer Disk Image auto-mounts from `~/linkdrop/ddi/` (override with `LINKDROP_DDI_DIR`) whenever it's missing — iOS forgets the mount on reboot, so linkdrop quietly re-uploads it the first time you take a Wi-Fi screenshot after the iPhone restarts.
 
 ## What it deliberately doesn't do
 
@@ -47,13 +45,41 @@ If these are critical to you, you need a Mac in the loop. If they're not, linkdr
 ### Runtime tools (required to use linkdrop)
 
 ```bash
-sudo apt install libimobiledevice-utils ifuse usbmuxd uxplay
+sudo apt install libimobiledevice-utils ifuse usbmuxd uxplay pipx
+pipx install pymobiledevice3
 ```
 
-- `libimobiledevice-utils` — `ideviceinfo`, `idevice_id`, `idevicescreenshot`
-- `ifuse` — FUSE mount of the iPhone's filesystem (for photo browsing)
+- `libimobiledevice-utils` — `ideviceinfo`, `idevice_id`, `idevicescreenshot` (USB path)
+- `ifuse` — FUSE mount of the iPhone's filesystem (USB photo browsing)
 - `usbmuxd` — daemon that handles USB ↔ iPhone communication
 - `uxplay` — AirPlay 2 mirror receiver
+- `pymobiledevice3` — pure-Python library behind the Wi-Fi path (device info, screenshot, apps list, AFC photo browsing)
+
+### Optional: Wi-Fi discovery via netmuxd
+
+For Wi-Fi detection without a cable plugged in, install [netmuxd](https://github.com/jkcoxson/netmuxd):
+
+```bash
+curl -L -o /tmp/netmuxd https://github.com/jkcoxson/netmuxd/releases/latest/download/netmuxd-x86_64-linux-gnu
+sudo install -m 0755 /tmp/netmuxd /usr/local/bin/netmuxd
+```
+
+Then create `/etc/systemd/system/netmuxd.service`:
+
+```ini
+[Unit]
+Description=netmuxd — Wi-Fi iPhone discovery
+After=avahi-daemon.service
+
+[Service]
+ExecStart=/usr/local/bin/netmuxd --disable-unix --disable-heartbeat --host 127.0.0.1 -p 27015
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+…and `sudo systemctl enable --now netmuxd`. Without this, linkdrop still discovers Wi-Fi devices directly via mDNS once they've been paired with pymobiledevice3.
 
 ### Build dependencies (required to compile from source)
 
@@ -112,10 +138,10 @@ Every tool call is wrapped in a single `run()` helper that converts `NotFound` e
 
 ## Roadmap
 
-- **v0.2** — Wi-Fi pairing (via `idevicepair`), drag-drop photo downloads, video thumbnail cache
-- **v0.3** — Notification tail via `idevicesyslog` (best-effort, clearly labeled)
-- **v0.4** — File manager tab: browse app sandboxes, copy files in/out, quick look
-- **v0.5** — Flatpak + AppImage + Snap publishing
+- ~~**v0.2** — Wi-Fi pairing + dual-transport device picker~~ ✅
+- ~~**v0.3** — Notifications tab tailing `idevicesyslog`~~ ✅
+- **v0.4** — File manager: Apps tab done; per-app sandbox browsing via `house_arrest` AFC in progress
+- **v0.5** — AppImage + .deb via `bun run tauri build`; Flatpak/Snap follow-ups
 
 ## Related projects
 

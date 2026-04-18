@@ -27,13 +27,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "appimage"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "scripts/pmd3_helper.py"
     ],
     "category": "Utility",
     "shortDescription": "Connect your iPhone to Ubuntu",

@@ -18,6 +18,12 @@ use notifications::NotificationsState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
+                pmd3::set_resource_dir(dir);
+            }
+            Ok(())
+        })
         .manage(AirPlayState::default())
         .manage(NotificationsState::default())
         .invoke_handler(tauri::generate_handler![
