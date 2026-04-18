@@ -351,30 +351,50 @@ function DevicePanel({
           </span>
         </div>
         {transport === "usb" && (
-          <div className="row" style={{ marginTop: 12 }}>
-            <button
-              className="btn secondary"
-              onClick={async () => {
-                setError(null);
-                try {
-                  await api.enableWifiSync(udid);
-                  alert(
-                    "Wi-Fi sync enabled. Unplug the iPhone and it should appear under Wi-Fi within ~30s."
-                  );
-                } catch (e) {
-                  setError(String(e));
-                }
-              }}
-            >
-              Enable Wi-Fi sync
-            </button>
-            <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
-              One-time. Keeps the device reachable without a cable.
-            </span>
-          </div>
+          <WifiSyncRow udid={udid} onError={setError} />
         )}
       </div>
     </>
+  );
+}
+
+function WifiSyncRow({
+  udid,
+  onError,
+}: {
+  udid: string;
+  onError: (e: string | null) => void;
+}) {
+  const [state, setState] = useState<"idle" | "running" | "done">("idle");
+
+  const click = async () => {
+    if (state === "running") return;
+    setState("running");
+    onError(null);
+    try {
+      await api.enableWifiSync(udid);
+      setState("done");
+    } catch (e) {
+      setState("idle");
+      onError(String(e));
+    }
+  };
+
+  return (
+    <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
+      <button className="btn secondary" onClick={click} disabled={state === "running"}>
+        {state === "running"
+          ? "Flipping flag…"
+          : state === "done"
+            ? "Wi-Fi sync enabled ✓"
+            : "Enable Wi-Fi sync"}
+      </button>
+      <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+        {state === "done"
+          ? "Unplug the iPhone and refresh — should show as Wi-Fi within ~30s."
+          : "One-time. Keeps the device reachable without a cable."}
+      </span>
+    </div>
   );
 }
 
