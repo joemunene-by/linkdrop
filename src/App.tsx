@@ -12,7 +12,13 @@ import type {
   Transport,
 } from "./types";
 
-type Tab = "device" | "photos" | "apps" | "mirror" | "notifications";
+type Tab =
+  | "device"
+  | "photos"
+  | "apps"
+  | "mirror"
+  | "notifications"
+  | "diagnostics";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "device", label: "Device" },
@@ -20,6 +26,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "apps", label: "Apps" },
   { key: "mirror", label: "Screen mirror" },
   { key: "notifications", label: "Notifications" },
+  { key: "diagnostics", label: "Diagnostics" },
 ];
 
 export default function App() {
@@ -52,6 +59,13 @@ export default function App() {
     return () => clearInterval(t);
 
   }, []);
+
+  // Fire-and-forget DDI prime when a device is selected — makes the first
+  // Wi-Fi screenshot fast and surfaces Personalized-DDI downloads early.
+  useEffect(() => {
+    if (!selectedUdid || !selectedTransport) return;
+    api.primeDdi(selectedUdid, selectedTransport).catch(() => {});
+  }, [selectedUdid, selectedTransport]);
 
   return (
     <div className="app">
@@ -108,6 +122,9 @@ export default function App() {
         {tab === "mirror" && <MirrorPanel />}
         {tab === "notifications" && (
           <NotificationsPanel udid={selectedUdid} transport={selectedTransport} />
+        )}
+        {tab === "diagnostics" && (
+          <DiagnosticsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
       </main>
     </div>
@@ -413,7 +430,17 @@ function PhotosPanel({
 
       {mounted && (
         <div className="card">
-          <h2>DCIM</h2>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <h2 style={{ margin: 0 }}>DCIM</h2>
+            <div style={{ flex: 1 }} />
+            {transport === "wifi" && udid && photos.length > 0 && (
+              <PhotoBulkDownload
+                udid={udid}
+                transport={transport}
+                photos={photos}
+              />
+            )}
+          </div>
           {photos.length === 0 ? (
             <div className="empty">No photos found.</div>
           ) : (
@@ -423,6 +450,28 @@ function PhotosPanel({
                   <div className="name">{p.name}</div>
                   <div className="kind">{p.kind}</div>
                   <div>{formatBytes(p.size_bytes)}</div>
+                  {transport === "wifi" && udid && (
+                    <button
+                      className="btn secondary"
+                      style={{
+                        marginTop: 6,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        width: "100%",
+                      }}
+                      onClick={async () => {
+                        try {
+                          const dest = `${await homeDir()}/Pictures/linkdrop/${p.name}`;
+                          await api.pullPhoto(udid, transport, p.path, dest);
+                          alert(`Saved: ${dest}`);
+                        } catch (e) {
+                          setError(String(e));
+                        }
+                      }}
+                    >
+                      Download
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -430,6 +479,61 @@ function PhotosPanel({
         </div>
       )}
     </>
+  );
+}
+
+function PhotoBulkDownload({
+  udid,
+  transport,
+  photos,
+}: {
+  udid: string;
+  transport: Transport;
+  photos: PhotoEntry[];
+}) {
+  const [progress, setProgress] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+    errors: number;
+  }>({ running: false, done: 0, total: 0, errors: 0 });
+
+  const run = async () => {
+    if (progress.running) return;
+    setProgress({ running: true, done: 0, total: photos.length, errors: 0 });
+    let done = 0;
+    let errors = 0;
+    const base = `${await homeDir()}/Pictures/linkdrop`;
+    for (const p of photos) {
+      try {
+        await api.pullPhoto(udid, transport, p.path, `${base}/${p.name}`);
+      } catch {
+        errors++;
+      }
+      done++;
+      setProgress({ running: true, done, total: photos.length, errors });
+    }
+    setProgress({ running: false, done, total: photos.length, errors });
+    alert(
+      `Downloaded ${done - errors}/${photos.length} → ~/Pictures/linkdrop/${errors ? ` (${errors} failed)` : ""}`,
+    );
+  };
+
+  return (
+    <div className="row" style={{ gap: 8 }}>
+      {progress.running && (
+        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+          {progress.done}/{progress.total}
+        </span>
+      )}
+      <button
+        className="btn"
+        onClick={run}
+        disabled={progress.running || photos.length === 0}
+      >
+        {progress.running ? "Downloading…" : `Download all (${photos.length})`}
+      </button>
+    </div>
   );
 }
 
@@ -517,6 +621,36 @@ function AppsPanel({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [browsing, setBrowsing] = useState<AppEntry | null>(null);
+  const [ipaPath, setIpaPath] = useState("");
+  const [installing, setInstalling] = useState(false);
+
+  const install = async () => {
+    if (!udid || !transport || !ipaPath.trim()) return;
+    setInstalling(true);
+    setError(null);
+    try {
+      await api.installApp(udid, transport, ipaPath.trim());
+      alert(`Installed: ${ipaPath}`);
+      setIpaPath("");
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const uninstall = async (app: AppEntry) => {
+    if (!udid || !transport) return;
+    if (!confirm(`Uninstall ${app.name}?`)) return;
+    setError(null);
+    try {
+      await api.uninstallApp(udid, transport, app.bundle_id);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const load = async () => {
     if (!udid || !transport) return;
@@ -593,6 +727,30 @@ function AppsPanel({
             </span>
           )}
         </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            style={{
+              flex: 1,
+              padding: "6px 10px",
+              background: "var(--bg-deep)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              fontSize: 13,
+              fontFamily: "monospace",
+            }}
+            placeholder="Path to .ipa to install (e.g. /home/ghost/Downloads/foo.ipa)"
+            value={ipaPath}
+            onChange={(e) => setIpaPath(e.target.value)}
+          />
+          <button
+            className="btn"
+            onClick={install}
+            disabled={!udid || !transport || !ipaPath.trim() || installing}
+          >
+            {installing ? "Installing…" : "Install"}
+          </button>
+        </div>
       </div>
 
       {apps.length > 0 && (
@@ -623,19 +781,24 @@ function AppsPanel({
                 <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
                   {a.version}
                 </div>
-                {a.has_file_sharing ? (
+                <div className="row" style={{ gap: 6 }}>
+                  {a.has_file_sharing ? (
+                    <button
+                      className="btn secondary"
+                      style={{ padding: "2px 10px", fontSize: 12 }}
+                      onClick={() => setBrowsing(a)}
+                    >
+                      Browse
+                    </button>
+                  ) : null}
                   <button
-                    className="btn secondary"
+                    className="btn danger"
                     style={{ padding: "2px 10px", fontSize: 12 }}
-                    onClick={() => setBrowsing(a)}
+                    onClick={() => uninstall(a)}
                   >
-                    Browse
+                    Uninstall
                   </button>
-                ) : (
-                  <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                    —
-                  </span>
-                )}
+                </div>
               </Fragment>
             ))}
           </div>
@@ -780,6 +943,176 @@ function AppBrowser({
         )}
       </div>
     </>
+  );
+}
+
+function DiagnosticsPanel({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
+  const [reports, setReports] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  const load = async () => {
+    if (!udid || !transport) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await api.listCrashReports(udid, transport);
+      setReports(list);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pullAll = async () => {
+    if (!udid || !transport) return;
+    setPulling(true);
+    setError(null);
+    try {
+      const dest = `${await homeDir()}/Downloads/linkdrop-crashes-${Date.now()}`;
+      await api.pullCrashReports(udid, transport, dest);
+      alert(`Saved to: ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? reports.filter((r) => r.toLowerCase().includes(q))
+    : reports;
+
+  return (
+    <>
+      <h1>Diagnostics</h1>
+      <p className="sub">
+        Crash reports and analytics (<code>.ips</code>) copied from the device's{" "}
+        <code>CrashReports</code> mobile directory.
+      </p>
+
+      {error && <div className="error">{error}</div>}
+
+      <div className="card">
+        <div className="row">
+          <button
+            className="btn"
+            onClick={load}
+            disabled={!udid || !transport || loading}
+          >
+            {loading ? "Loading…" : reports.length > 0 ? "Reload" : "List crashes"}
+          </button>
+          <button
+            className="btn"
+            onClick={pullAll}
+            disabled={!udid || !transport || pulling || reports.length === 0}
+          >
+            {pulling ? "Pulling…" : `Pull all (${reports.length})`}
+          </button>
+          <input
+            style={{
+              flex: 1,
+              padding: "6px 10px",
+              background: "var(--bg-deep)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+            placeholder="Filter by name (e.g. Spotify, Panics)"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={reports.length === 0}
+          />
+          {reports.length > 0 && (
+            <span className="pill ok">
+              {filtered.length} / {reports.length}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {reports.length > 0 && (
+        <div className="card">
+          <div
+            style={{
+              fontFamily: "monospace",
+              fontSize: 11,
+              maxHeight: 420,
+              overflowY: "auto",
+              color: "var(--text-dim)",
+            }}
+          >
+            {filtered.map((r) => (
+              <div key={r} style={{ padding: "2px 0" }}>
+                {r}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <BackupCard udid={udid} transport={transport} />
+    </>
+  );
+}
+
+function BackupCard({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const backup = async () => {
+    if (!udid || !transport) return;
+    setRunning(true);
+    setError(null);
+    try {
+      const dest = `${await homeDir()}/Backups/linkdrop-${udid.slice(0, 8)}-${Date.now()}`;
+      await api.createBackup(udid, transport, dest);
+      alert(`Backup saved: ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Backup</h2>
+      <p
+        className="sub"
+        style={{ marginTop: -4, marginBottom: 10, fontSize: 12 }}
+      >
+        Full MobileBackup2 backup. Saves into <code>~/Backups/</code>. Can take
+        a while + uses lots of disk.
+      </p>
+      {error && <div className="error">{error}</div>}
+      <div className="row">
+        <button
+          className="btn"
+          onClick={backup}
+          disabled={!udid || !transport || running}
+        >
+          {running ? "Backing up… (don't unplug)" : "Create backup"}
+        </button>
+      </div>
+    </div>
   );
 }
 

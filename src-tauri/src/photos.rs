@@ -86,6 +86,18 @@ pub fn unmount_device() -> Result<()> {
 }
 
 #[tauri::command]
+pub fn pull_photo(
+    udid: String,
+    transport: Transport,
+    remote: String,
+    local: String,
+) -> Result<()> {
+    let _ = transport;
+    crate::pmd3::run_with_args("pull-photo", &[&udid, &remote, &local])?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn list_photos(
     udid: Option<String>,
     transport: Option<Transport>,

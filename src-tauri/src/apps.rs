@@ -62,3 +62,33 @@ pub fn pull_app_file(
     crate::pmd3::run_with_args("pull-app-file", &[&udid, &bundle_id, &remote, &local])?;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn install_app(udid: String, transport: Transport, ipa_path: String) -> Result<()> {
+    let _ = transport;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::pmd3::run_with_args("install-app", &[&udid, &ipa_path])
+    })
+    .await
+    .map_err(|e| LinkdropError::ToolFailed {
+        tool: "install_app".into(),
+        status: "join".into(),
+        stderr: format!("{e:?}"),
+    })??;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn uninstall_app(udid: String, transport: Transport, bundle_id: String) -> Result<()> {
+    let _ = transport;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::pmd3::run_with_args("uninstall-app", &[&udid, &bundle_id])
+    })
+    .await
+    .map_err(|e| LinkdropError::ToolFailed {
+        tool: "uninstall_app".into(),
+        status: "join".into(),
+        stderr: format!("{e:?}"),
+    })??;
+    Ok(())
+}

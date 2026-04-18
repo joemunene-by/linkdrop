@@ -2,7 +2,9 @@
 
 mod airplay;
 mod apps;
+mod ddi;
 mod device;
+mod diagnostics;
 mod error;
 mod muxd;
 mod notifications;
@@ -32,6 +34,7 @@ pub fn run() {
             photos::mount_device,
             photos::unmount_device,
             photos::list_photos,
+            photos::pull_photo,
             screenshot::take_screenshot,
             airplay::start_airplay,
             airplay::stop_airplay,
@@ -42,6 +45,12 @@ pub fn run() {
             apps::list_apps,
             apps::list_app_files,
             apps::pull_app_file,
+            apps::install_app,
+            apps::uninstall_app,
+            ddi::prime_ddi,
+            diagnostics::list_crash_reports,
+            diagnostics::pull_crash_reports,
+            diagnostics::create_backup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

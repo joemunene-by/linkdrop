@@ -19,6 +19,11 @@ Usage:
   pmd3_helper.py pull-photo <udid> <remote> <local>  # download one DCIM file
   pmd3_helper.py list-app-files <udid> <bundle_id> [path]  # list app sandbox entries
   pmd3_helper.py pull-app-file <udid> <bundle_id> <remote> <local>  # download from sandbox
+  pmd3_helper.py crash-list <udid>     # list crash report filenames
+  pmd3_helper.py crash-pull <udid> <dest_dir>  # copy all crash reports to local dir
+  pmd3_helper.py install-app <udid> <ipa_path>  # install .ipa
+  pmd3_helper.py uninstall-app <udid> <bundle_id>  # uninstall by bundle id
+  pmd3_helper.py backup <udid> <dest_dir>  # MobileBackup2 full backup
 """
 
 import asyncio
@@ -29,8 +34,10 @@ from pathlib import Path
 
 from pymobiledevice3.lockdown import get_mobdev2_lockdowns
 from pymobiledevice3.services.afc import AfcService
+from pymobiledevice3.services.crash_reports import CrashReportsManager
 from pymobiledevice3.services.house_arrest import HouseArrestService
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
+from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
 from pymobiledevice3.services.mobile_image_mounter import (
     DeveloperDiskImageMounter,
     auto_mount,
@@ -211,6 +218,45 @@ async def cmd_pull_app_file(udid: str, bundle_id: str, remote: str, local: str) 
             pass
 
 
+async def cmd_crash_list(udid: str) -> None:
+    lockdown = await first_lockdown(udid)
+    async with CrashReportsManager(lockdown) as crashes:
+        entries = await crashes.ls("/")
+    # filter out dirs (those look like "ReportedCrashes/" or similar) — keep files
+    files = [e for e in entries if not e.endswith("/")]
+    print(json.dumps(sorted(files)))
+
+
+async def cmd_crash_pull(udid: str, dest_dir: str) -> None:
+    os.makedirs(dest_dir, exist_ok=True)
+    lockdown = await first_lockdown(udid)
+    async with CrashReportsManager(lockdown) as crashes:
+        await crashes.pull(out=dest_dir, entry="/", erase=False, progress_bar=False)
+    print(json.dumps({"dest": dest_dir}))
+
+
+async def cmd_install_app(udid: str, ipa_path: str) -> None:
+    lockdown = await first_lockdown(udid)
+    service = InstallationProxyService(lockdown)
+    await service.install_from_local(Path(ipa_path))
+    print(json.dumps({"ok": True, "installed": ipa_path}))
+
+
+async def cmd_uninstall_app(udid: str, bundle_id: str) -> None:
+    lockdown = await first_lockdown(udid)
+    service = InstallationProxyService(lockdown)
+    await service.uninstall(bundle_id)
+    print(json.dumps({"ok": True, "uninstalled": bundle_id}))
+
+
+async def cmd_backup(udid: str, dest_dir: str) -> None:
+    os.makedirs(dest_dir, exist_ok=True)
+    lockdown = await first_lockdown(udid)
+    async with Mobilebackup2Service(lockdown) as backup:
+        await backup.backup(full=True, backup_directory=dest_dir)
+    print(json.dumps({"ok": True, "dest": dest_dir}))
+
+
 async def cmd_apps(udid: str) -> None:
     lockdown = await first_lockdown(udid)
     service = InstallationProxyService(lockdown)
@@ -335,6 +381,33 @@ def main(argv: list[str]) -> int:
             print("usage: pmd3_helper.py pull-app-file <udid> <bundle_id> <remote> <local>", file=sys.stderr)
             return 2
         asyncio.run(cmd_pull_app_file(udid, argv[3], argv[4], argv[5]))
+        return 0
+    if op == "crash-list":
+        asyncio.run(cmd_crash_list(udid))
+        return 0
+    if op == "crash-pull":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py crash-pull <udid> <dest_dir>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_crash_pull(udid, argv[3]))
+        return 0
+    if op == "install-app":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py install-app <udid> <ipa_path>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_install_app(udid, argv[3]))
+        return 0
+    if op == "uninstall-app":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py uninstall-app <udid> <bundle_id>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_uninstall_app(udid, argv[3]))
+        return 0
+    if op == "backup":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py backup <udid> <dest_dir>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_backup(udid, argv[3]))
         return 0
     handlers = {
         "info": cmd_info,
