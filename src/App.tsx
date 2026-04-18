@@ -83,18 +83,49 @@ export default function App() {
   const selectedUdidRef = useRef(selectedUdid);
   selectedUdidRef.current = selectedUdid;
 
+  // Last-seen timestamps per udid. mDNS announcements come in bursts with
+  // quiet windows; if we only trusted the latest poll we'd flicker
+  // devices in and out of the picker. A device stays visible until it's
+  // been missing for STICKY_MS (60s) — enough to paper over Bonjour gaps.
+  const STICKY_MS = 60_000;
+  const lastSeenRef = useRef<Map<string, number>>(new Map());
+  const devicesRef = useRef<DeviceSummary[]>([]);
+  devicesRef.current = devices;
+
   const refreshDevices = async () => {
-    if (inflightRef.current) return; // skip overlap — serialize through one call
+    if (inflightRef.current) return;
     inflightRef.current = true;
     setRefreshing(true);
     setError(null);
     try {
-      const list = await api.listDevices();
-      setDevices(list);
+      const fresh = await api.listDevices();
+      const now = Date.now();
+      const seen = lastSeenRef.current;
+      for (const d of fresh) seen.set(d.udid, now);
+
+      // Merge: keep any device seen within STICKY_MS even if this poll
+      // didn't return it, so Bonjour gaps don't bounce the picker.
+      const byUdid = new Map<string, DeviceSummary>();
+      for (const d of fresh) byUdid.set(d.udid, d);
+      for (const prev of devicesRef.current) {
+        if (byUdid.has(prev.udid)) continue;
+        const last = seen.get(prev.udid) ?? 0;
+        if (now - last < STICKY_MS) byUdid.set(prev.udid, prev);
+      }
+      // Evict anything past its sticky window.
+      for (const [udid, ts] of seen) {
+        if (now - ts >= STICKY_MS) {
+          seen.delete(udid);
+          byUdid.delete(udid);
+        }
+      }
+      const merged = Array.from(byUdid.values());
+      setDevices(merged);
+
       const currentlySelected = selectedUdidRef.current;
-      if (list.length > 0 && !currentlySelected) {
-        setSelectedUdid(list[0].udid);
-      } else if (list.length === 0) {
+      if (merged.length > 0 && !currentlySelected) {
+        setSelectedUdid(merged[0].udid);
+      } else if (merged.length === 0) {
         setSelectedUdid(null);
       }
     } catch (e) {
