@@ -39,6 +39,8 @@ export const api = {
   startNotifications: (udid: string, transport: Transport) =>
     invoke<void>("start_notifications", { udid, transport }),
   stopNotifications: () => invoke<void>("stop_notifications"),
+  saveSyslogToFile: (path: string, content: string) =>
+    invoke<void>("save_syslog_to_file", { path, content }),
   listApps: (udid: string, transport: Transport) =>
     invoke<AppEntry[]>("list_apps", { udid, transport }),
   listCrashReports: (udid: string, transport: Transport) =>
@@ -47,6 +49,22 @@ export const api = {
     invoke<void>("pull_crash_reports", { udid, transport, destDir }),
   createBackup: (udid: string, transport: Transport, destDir: string) =>
     invoke<void>("create_backup", { udid, transport, destDir }),
+  pullSysdiagnose: (udid: string, transport: Transport, destDir: string) =>
+    invoke<void>("pull_sysdiagnose", { udid, transport, destDir }),
+  pushAppFile: (
+    udid: string,
+    transport: Transport,
+    bundleId: string,
+    local: string,
+    remote: string,
+  ) =>
+    invoke<void>("push_app_file", {
+      udid,
+      transport,
+      bundleId,
+      local,
+      remote,
+    }),
   installApp: (udid: string, transport: Transport, ipaPath: string) =>
     invoke<void>("install_app", { udid, transport, ipaPath }),
   uninstallApp: (udid: string, transport: Transport, bundleId: string) =>

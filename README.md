@@ -2,10 +2,11 @@
 
 # linkdrop
 
-**Connect your iPhone to Ubuntu. Photos, files, device info, and screen mirror — in one native app.**
+**Connect your iPhone to Linux, macOS, or Windows. Photos, files, apps, backups, and screen mirror — in one native app.**
 
-Ubuntu's answer to Windows Phone Link, built for iPhone. Tauri + Rust on the backend, React on the front.
-No Mac bridge. No jailbreak. No cloud.
+A cross-platform Phone-Link-for-iPhone, built around `pymobiledevice3`.
+Tauri + Rust on the backend, React on the front. No Mac bridge required
+on Linux/Windows. No jailbreak. No cloud.
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat-square&logo=tauri&logoColor=black)
 ![Rust](https://img.shields.io/badge/rust-stable-DEA584?style=flat-square&logo=rust&logoColor=white)
@@ -18,13 +19,17 @@ No Mac bridge. No jailbreak. No cloud.
 
 ## What it does
 
-- **Device info** — name, model, iOS version, serial, battery, storage usage
-- **Photos** — mount the iPhone's DCIM folder, browse and copy images/videos
-- **Screenshots** — capture the iPhone screen, saved to `~/Pictures/linkdrop`
-- **Screen mirror** — one-click AirPlay receiver so you can mirror your iPhone to your desktop
-- **Wi-Fi detection** — once wireless sync is enabled on the iPhone, the device appears next to USB-connected ones (see status below)
+- **Device info** — name, model, iOS version, serial, battery, storage
+- **Photos** — browse DCIM via AFC, per-photo download, bulk "Download all"
+- **Apps** — installed-app list, file-sharing sandbox browser (Documents/), install `.ipa`, uninstall
+- **Screenshots** — one click, DDI auto-mounts behind the scenes
+- **Notifications tail** — iOS syslog filtered by regex, savable to file
+- **Crash reports + Sysdiagnose** — list, pull, export for Apple Feedback
+- **iOS backup** — full MobileBackup2 backup to a folder of your choice
+- **Screen mirror** — AirPlay receiver (Linux: `uxplay`; macOS uses built-in)
+- **Wi-Fi discovery** — device shows up in the picker once paired, cableless
 
-All core ops run via USB. iPhone just needs to be plugged in and trusted.
+Every op works on both USB and Wi-Fi. One codepath, all platforms.
 
 ## Supported iOS versions
 
@@ -59,29 +64,55 @@ If these are critical to you, you need a Mac in the loop. If they're not, linkdr
 
 ## Install the backing tools
 
-### Runtime tools (required to use linkdrop)
+### Runtime tools (all platforms)
+
+linkdrop drives a small Python helper that calls `pymobiledevice3` for
+everything iPhone-related. One toolchain, three OSes:
+
+**Linux (Debian / Ubuntu)**
 
 ```bash
-sudo apt install libimobiledevice-utils ifuse usbmuxd uxplay pipx
+sudo apt install libimobiledevice-utils usbmuxd uxplay pipx
 pipx install pymobiledevice3
 ```
 
-- `libimobiledevice-utils` — `ideviceinfo`, `idevice_id`, `idevicescreenshot` (USB path)
-- `ifuse` — FUSE mount of the iPhone's filesystem (USB photo browsing)
-- `usbmuxd` — daemon that handles USB ↔ iPhone communication
-- `uxplay` — AirPlay 2 mirror receiver
-- `pymobiledevice3` — pure-Python library behind the Wi-Fi path (device info, screenshot, apps list, AFC photo browsing)
+**macOS**
 
-### Optional: Wi-Fi discovery via netmuxd
+```bash
+brew install libimobiledevice ideviceinstaller pipx
+pipx install pymobiledevice3
+```
 
-For Wi-Fi detection without a cable plugged in, install [netmuxd](https://github.com/jkcoxson/netmuxd):
+(macOS ships its own usbmuxd via Apple Mobile Device Service — nothing else
+to start. AirPlay is handled natively by macOS itself, so the Screen Mirror
+tab uses an AirPlay receiver only if you have one installed; otherwise the
+system picker works fine.)
+
+**Windows**
+
+Install iTunes from Apple (ships Apple Mobile Device Service — linkdrop's
+USB path talks to that). Then:
+
+```powershell
+winget install Python.Python.3.12
+python -m pip install --user pipx
+python -m pipx ensurepath
+pipx install pymobiledevice3
+```
+
+### Optional: Linux-only Wi-Fi discovery via netmuxd
+
+Linux users can drop in [netmuxd](https://github.com/jkcoxson/netmuxd) so
+Wi-Fi-only iPhones show up in linkdrop's picker without pymobiledevice3's
+per-call Bonjour browse. Not required — linkdrop's own listing already
+browses via Bonjour on every platform.
 
 ```bash
 curl -L -o /tmp/netmuxd https://github.com/jkcoxson/netmuxd/releases/latest/download/netmuxd-x86_64-linux-gnu
 sudo install -m 0755 /tmp/netmuxd /usr/local/bin/netmuxd
 ```
 
-Then create `/etc/systemd/system/netmuxd.service`:
+`/etc/systemd/system/netmuxd.service`:
 
 ```ini
 [Unit]
@@ -96,7 +127,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-…and `sudo systemctl enable --now netmuxd`. Without this, linkdrop still discovers Wi-Fi devices directly via mDNS once they've been paired with pymobiledevice3.
+…then `sudo systemctl enable --now netmuxd`.
 
 ### Build dependencies (required to compile from source)
 
@@ -157,8 +188,10 @@ Every tool call is wrapped in a single `run()` helper that converts `NotFound` e
 
 - ~~**v0.2** — Wi-Fi pairing + dual-transport device picker~~ ✅
 - ~~**v0.3** — Notifications tab tailing `idevicesyslog`~~ ✅
-- **v0.4** — File manager: Apps tab done; per-app sandbox browsing via `house_arrest` AFC in progress
-- **v0.5** — AppImage + .deb via `bun run tauri build`; Flatpak/Snap follow-ups
+- ~~**v0.4** — Apps tab + per-app sandbox browser via `house_arrest`~~ ✅
+- ~~**v0.5** — AppImage + .deb via `bun run tauri build`~~ ✅
+- ~~**v0.6** — Wi-Fi-complete ops, DDI auto-mount, photo bulk pull, crash logs, backups, app install/uninstall, macOS + Windows builds, GitHub Actions matrix, Settings + theme, first-run wizard~~ ✅
+- **v0.7** — Flatpak / Snap / AUR, inline photo thumbnails, signed macOS + Windows artifacts
 
 ## Related projects
 

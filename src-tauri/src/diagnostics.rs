@@ -38,3 +38,22 @@ pub async fn create_backup(
     })??;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn pull_sysdiagnose(
+    udid: String,
+    transport: Transport,
+    dest_dir: String,
+) -> Result<()> {
+    let _ = transport;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::pmd3::run_with_args("sysdiagnose", &[&udid, &dest_dir])
+    })
+    .await
+    .map_err(|e| LinkdropError::ToolFailed {
+        tool: "pull_sysdiagnose".into(),
+        status: "join".into(),
+        stderr: format!("{e:?}"),
+    })??;
+    Ok(())
+}

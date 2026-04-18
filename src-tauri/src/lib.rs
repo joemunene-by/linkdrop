@@ -20,6 +20,8 @@ use notifications::NotificationsState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .setup(|app| {
             if let Ok(dir) = tauri::Manager::path(app).resource_dir() {
                 pmd3::set_resource_dir(dir);
@@ -42,15 +44,18 @@ pub fn run() {
             wifi_sync::enable_wifi_sync,
             notifications::start_notifications,
             notifications::stop_notifications,
+            notifications::save_syslog_to_file,
             apps::list_apps,
             apps::list_app_files,
             apps::pull_app_file,
+            apps::push_app_file,
             apps::install_app,
             apps::uninstall_app,
             ddi::prime_ddi,
             diagnostics::list_crash_reports,
             diagnostics::pull_crash_reports,
             diagnostics::create_backup,
+            diagnostics::pull_sysdiagnose,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

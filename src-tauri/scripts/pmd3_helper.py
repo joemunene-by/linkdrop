@@ -24,6 +24,8 @@ Usage:
   pmd3_helper.py install-app <udid> <ipa_path>  # install .ipa
   pmd3_helper.py uninstall-app <udid> <bundle_id>  # uninstall by bundle id
   pmd3_helper.py backup <udid> <dest_dir>  # MobileBackup2 full backup
+  pmd3_helper.py sysdiagnose <udid> <dest_dir>  # trigger + pull new sysdiagnose
+  pmd3_helper.py push-app-file <udid> <bundle_id> <local> <remote>  # upload to sandbox
 """
 
 import asyncio
@@ -32,7 +34,8 @@ import os
 import sys
 from pathlib import Path
 
-from pymobiledevice3.lockdown import get_mobdev2_lockdowns
+from pymobiledevice3.lockdown import create_using_usbmux, get_mobdev2_lockdowns
+from pymobiledevice3.usbmux import list_devices as usbmux_list_devices
 from pymobiledevice3.services.afc import AfcService
 from pymobiledevice3.services.crash_reports import CrashReportsManager
 from pymobiledevice3.services.house_arrest import HouseArrestService
@@ -50,31 +53,61 @@ INFO_TIMEOUT = 4.0
 
 
 async def first_lockdown(udid: str):
-    """Return the first pair-verified Wi-Fi lockdown client for `udid`."""
+    """Return a pair-verified lockdown client for `udid`.
+
+    Tries USB (usbmuxd on Linux, Apple Mobile Device Service on Windows,
+    built-in daemon on macOS) first; falls back to Wi-Fi via mDNS if USB
+    doesn't see the device. Works uniformly on Linux, macOS, and Windows.
+    """
+    # USB path — fastest when the cable is plugged in.
+    try:
+        return await create_using_usbmux(serial=udid)
+    except Exception:
+        pass
+    # Wi-Fi path via Bonjour.
     async for _, lockdown in get_mobdev2_lockdowns(
         udid=udid, only_paired=True, timeout=INFO_TIMEOUT
     ):
         return lockdown
-    raise SystemExit(f"no paired Wi-Fi device {udid} found on LAN")
+    raise SystemExit(f"device {udid} not found on USB or Wi-Fi")
 
 
 async def cmd_list() -> None:
-    seen: list[str] = []
-    async for ident, lockdown in get_mobdev2_lockdowns(
-        only_paired=True, timeout=LIST_TIMEOUT
-    ):
-        udid = (
-            getattr(lockdown, "udid", None)
-            or (lockdown.all_values or {}).get("UniqueDeviceID")
-            or ident
-        )
-        if udid and udid not in seen:
-            seen.append(udid)
-        try:
-            await lockdown.close()
-        except Exception:
-            pass
-    print(json.dumps(seen))
+    """Emit [{udid, transport}, ...] — USB first, Wi-Fi second, dedup'd."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    # USB via usbmuxd / AMDS / native daemon
+    try:
+        for dev in await usbmux_list_devices():
+            udid = getattr(dev, "serial", None) or getattr(dev, "udid", None)
+            if udid and udid not in seen:
+                seen.add(udid)
+                out.append({"udid": udid, "transport": "usb"})
+    except Exception:
+        pass
+
+    # Wi-Fi via mDNS
+    try:
+        async for ident, lockdown in get_mobdev2_lockdowns(
+            only_paired=True, timeout=LIST_TIMEOUT
+        ):
+            udid = (
+                getattr(lockdown, "udid", None)
+                or (lockdown.all_values or {}).get("UniqueDeviceID")
+                or ident
+            )
+            if udid and udid not in seen:
+                seen.add(udid)
+                out.append({"udid": udid, "transport": "wifi"})
+            try:
+                await lockdown.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    print(json.dumps(out))
 
 
 async def cmd_info(udid: str) -> None:
@@ -216,6 +249,27 @@ async def cmd_pull_app_file(udid: str, bundle_id: str, remote: str, local: str) 
             await afc.aclose()
         except Exception:
             pass
+
+
+async def cmd_push_app_file(udid: str, bundle_id: str, local: str, remote: str) -> None:
+    lockdown = await first_lockdown(udid)
+    afc = await HouseArrestService.create(lockdown, bundle_id=bundle_id)
+    try:
+        await afc.push(local, remote)
+        print(json.dumps({"ok": True, "remote": remote}))
+    finally:
+        try:
+            await afc.aclose()
+        except Exception:
+            pass
+
+
+async def cmd_sysdiagnose(udid: str, dest_dir: str) -> None:
+    os.makedirs(dest_dir, exist_ok=True)
+    lockdown = await first_lockdown(udid)
+    async with CrashReportsManager(lockdown) as crashes:
+        name = await crashes.get_new_sysdiagnose(out=dest_dir)
+    print(json.dumps({"ok": True, "file": str(name)}))
 
 
 async def cmd_crash_list(udid: str) -> None:
@@ -408,6 +462,18 @@ def main(argv: list[str]) -> int:
             print("usage: pmd3_helper.py backup <udid> <dest_dir>", file=sys.stderr)
             return 2
         asyncio.run(cmd_backup(udid, argv[3]))
+        return 0
+    if op == "sysdiagnose":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py sysdiagnose <udid> <dest_dir>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_sysdiagnose(udid, argv[3]))
+        return 0
+    if op == "push-app-file":
+        if len(argv) < 6:
+            print("usage: pmd3_helper.py push-app-file <udid> <bundle_id> <local> <remote>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_push_app_file(udid, argv[3], argv[4], argv[5]))
         return 0
     handlers = {
         "info": cmd_info,

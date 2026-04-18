@@ -68,3 +68,13 @@ pub fn stop_notifications(state: State<NotificationsState>) -> Result<()> {
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn save_syslog_to_file(path: String, content: String) -> Result<()> {
+    std::fs::write(&path, content).map_err(|e| LinkdropError::ToolFailed {
+        tool: "save_syslog".into(),
+        status: e.kind().to_string(),
+        stderr: format!("{}: {e}", path),
+    })?;
+    Ok(())
+}

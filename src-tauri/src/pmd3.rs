@@ -16,15 +16,75 @@ pub fn set_resource_dir(dir: PathBuf) {
     let _ = RESOURCE_DIR.set(dir);
 }
 
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
+
 fn venv_python() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        let p = PathBuf::from(home)
-            .join(".local/share/pipx/venvs/pymobiledevice3/bin/python");
+    // pipx-installed pymobiledevice3 venv — locations vary by OS and pipx
+    // version. Fall through to whatever `python3` / `python` resolves to on
+    // PATH if the venv isn't where we expect.
+    let candidates: Vec<PathBuf> = if let Some(home) = home_dir() {
+        #[cfg(windows)]
+        {
+            vec![
+                // pipx ≥ 1.3 default
+                home.join("pipx")
+                    .join("venvs")
+                    .join("pymobiledevice3")
+                    .join("Scripts")
+                    .join("python.exe"),
+                // pipx < 1.3 (XDG-ish)
+                home.join("AppData")
+                    .join("Local")
+                    .join("pipx")
+                    .join("pipx")
+                    .join("venvs")
+                    .join("pymobiledevice3")
+                    .join("Scripts")
+                    .join("python.exe"),
+            ]
+        }
+        #[cfg(target_os = "macos")]
+        {
+            vec![
+                home.join(".local/pipx/venvs/pymobiledevice3/bin/python"),
+                home.join(".local/share/pipx/venvs/pymobiledevice3/bin/python"),
+                // Homebrew Python fallback
+                PathBuf::from("/opt/homebrew/bin/python3"),
+                PathBuf::from("/usr/local/bin/python3"),
+            ]
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            vec![
+                home.join(".local/share/pipx/venvs/pymobiledevice3/bin/python"),
+                home.join(".local/pipx/venvs/pymobiledevice3/bin/python"),
+            ]
+        }
+    } else {
+        Vec::new()
+    };
+    for p in candidates {
         if p.exists() {
             return p;
         }
     }
-    PathBuf::from("python3")
+    #[cfg(windows)]
+    {
+        PathBuf::from("python.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("python3")
+    }
 }
 
 fn helper_script() -> PathBuf {

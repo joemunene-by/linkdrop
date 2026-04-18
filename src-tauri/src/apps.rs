@@ -51,6 +51,19 @@ pub fn list_app_files(
 }
 
 #[tauri::command]
+pub fn push_app_file(
+    udid: String,
+    transport: Transport,
+    bundle_id: String,
+    local: String,
+    remote: String,
+) -> Result<()> {
+    let _ = transport;
+    crate::pmd3::run_with_args("push-app-file", &[&udid, &bundle_id, &local, &remote])?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn pull_app_file(
     udid: String,
     transport: Transport,

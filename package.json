@@ -1,9 +1,9 @@
 {
   "name": "linkdrop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.6.0",
   "type": "module",
-  "description": "Connect your iPhone to Ubuntu — device info, photos, files, and screen mirror. Ubuntu's answer to Phone Link.",
+  "description": "Connect your iPhone to Linux, macOS, or Windows — device info, photos, apps, screenshot, backup, and screen mirror.",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-store": "^2.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "./ipc";
 import type {
   AppEntry,
@@ -18,7 +19,8 @@ type Tab =
   | "apps"
   | "mirror"
   | "notifications"
-  | "diagnostics";
+  | "diagnostics"
+  | "settings";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "device", label: "Device" },
@@ -27,13 +29,51 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "mirror", label: "Screen mirror" },
   { key: "notifications", label: "Notifications" },
   { key: "diagnostics", label: "Diagnostics" },
+  { key: "settings", label: "Settings" },
 ];
+
+type Theme = "system" | "light" | "dark";
+const THEME_STORAGE_KEY = "linkdrop.theme";
+const WIZARD_STORAGE_KEY = "linkdrop.setupSeen";
+
+function detectOs(): "linux" | "macos" | "windows" {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("mac")) return "macos";
+  if (ua.includes("win")) return "windows";
+  return "linux";
+}
+
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === "system") {
+    root.removeAttribute("data-theme");
+  } else {
+    root.setAttribute("data-theme", theme);
+  }
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("device");
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [selectedUdid, setSelectedUdid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ?? "system";
+    return ["system", "light", "dark"].includes(saved) ? saved : "system";
+  });
+
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  const [showWizard, setShowWizard] = useState(
+    () => localStorage.getItem(WIZARD_STORAGE_KEY) !== "1",
+  );
+  const dismissWizard = () => {
+    localStorage.setItem(WIZARD_STORAGE_KEY, "1");
+    setShowWizard(false);
+  };
 
   const selectedTransport: Transport | null =
     devices.find((d) => d.udid === selectedUdid)?.transport ?? null;
@@ -69,6 +109,7 @@ export default function App() {
 
   return (
     <div className="app">
+      {showWizard && <SetupWizard onDismiss={dismissWizard} />}
       <aside className="sidebar">
         <div className="brand">
           link<span className="dot">·</span>drop
@@ -126,6 +167,7 @@ export default function App() {
         {tab === "diagnostics" && (
           <DiagnosticsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
+        {tab === "settings" && <SettingsPanel theme={theme} setTheme={setTheme} />}
       </main>
     </div>
   );
@@ -728,21 +770,36 @@ function AppsPanel({
           )}
         </div>
         <div className="row" style={{ marginTop: 10 }}>
-          <input
+          <button
+            className="btn secondary"
+            onClick={async () => {
+              const picked = await openDialog({
+                multiple: false,
+                directory: false,
+                filters: [{ name: "iOS package", extensions: ["ipa"] }],
+              });
+              if (typeof picked === "string") setIpaPath(picked);
+            }}
+          >
+            Pick .ipa…
+          </button>
+          <div
             style={{
               flex: 1,
               padding: "6px 10px",
               background: "var(--bg-deep)",
-              color: "var(--text)",
+              color: ipaPath ? "var(--text)" : "var(--text-dim)",
               border: "1px solid var(--border)",
               borderRadius: 4,
-              fontSize: 13,
+              fontSize: 12,
               fontFamily: "monospace",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
-            placeholder="Path to .ipa to install (e.g. /home/ghost/Downloads/foo.ipa)"
-            value={ipaPath}
-            onChange={(e) => setIpaPath(e.target.value)}
-          />
+          >
+            {ipaPath || "(no file selected)"}
+          </div>
           <button
             className="btn"
             onClick={install}
@@ -869,6 +926,22 @@ function AppBrowser({
     }
   };
 
+  const upload = async () => {
+    try {
+      const picked = await openDialog({ multiple: false, directory: false });
+      if (typeof picked !== "string") return;
+      const name = picked.split(/[\\/]/).pop() ?? "upload";
+      const remote = path.endsWith("/") ? `${path}${name}` : `${path}/${name}`;
+      await api.pushAppFile(udid, transport, app.bundle_id, picked, remote);
+      // refresh listing
+      const list = await api.listAppFiles(udid, transport, app.bundle_id, path);
+      setEntries(list);
+      alert(`Uploaded → ${remote}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   return (
     <>
       <h1>{app.name}</h1>
@@ -893,6 +966,10 @@ function AppBrowser({
           <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-dim)" }}>
             {path}
           </span>
+          <div style={{ flex: 1 }} />
+          <button className="btn secondary" onClick={upload}>
+            Upload…
+          </button>
           {loading && <span style={{ color: "var(--text-dim)" }}>Loading…</span>}
         </div>
       </div>
@@ -941,6 +1018,156 @@ function AppBrowser({
             ))}
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+function SetupWizard({ onDismiss }: { onDismiss: () => void }) {
+  const os = detectOs();
+  const installCmd =
+    os === "macos"
+      ? "brew install libimobiledevice pipx && pipx install pymobiledevice3"
+      : os === "windows"
+        ? "winget install libimobiledevice && pipx install pymobiledevice3"
+        : "sudo apt install libimobiledevice-utils usbmuxd uxplay pipx && pipx install pymobiledevice3";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0, 0, 0, 0.55)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 100,
+      }}
+    >
+      <div
+        style={{
+          width: "min(560px, 92vw)",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          background: "var(--bg-elev)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 24,
+        }}
+      >
+        <h1 style={{ marginTop: 0 }}>Welcome to linkdrop</h1>
+        <p className="sub">
+          A tiny setup before your iPhone shows up. linkdrop detected you're on{" "}
+          <strong>{os}</strong>.
+        </p>
+
+        <ol style={{ paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>
+            <strong>Install the runtime bits:</strong>
+            <pre
+              style={{
+                background: "var(--bg-deep)",
+                padding: "10px 12px",
+                borderRadius: 6,
+                fontSize: 12,
+                overflowX: "auto",
+                marginTop: 6,
+              }}
+            >
+              {installCmd}
+            </pre>
+          </li>
+          <li>
+            <strong>Plug your iPhone in</strong> and tap{" "}
+            <em>Trust this computer</em> on the phone.
+          </li>
+          <li>
+            <strong>Pair it</strong> with pymobiledevice3 (creates a pair
+            record on disk):
+            <pre
+              style={{
+                background: "var(--bg-deep)",
+                padding: "10px 12px",
+                borderRadius: 6,
+                fontSize: 12,
+                marginTop: 6,
+              }}
+            >
+              pymobiledevice3 lockdown pair
+            </pre>
+          </li>
+          <li>
+            In the Device tab, click <strong>Enable Wi-Fi sync</strong> so you
+            can use linkdrop cablelessly afterwards.
+          </li>
+          <li>
+            (iOS &lt; 17 only) drop a matching DeveloperDiskImage into{" "}
+            <code>~/linkdrop/ddi/</code>, or let linkdrop auto-download when
+            you take a screenshot.
+          </li>
+        </ol>
+
+        <div className="row" style={{ justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="btn secondary" onClick={onDismiss}>
+            Don't show again
+          </button>
+          <button className="btn" onClick={onDismiss}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({
+  theme,
+  setTheme,
+}: {
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+}) {
+  return (
+    <>
+      <h1>Settings</h1>
+      <p className="sub">Preferences are stored in browser localStorage.</p>
+
+      <div className="card">
+        <h2>Appearance</h2>
+        <div className="row" style={{ gap: 10 }}>
+          {(["system", "light", "dark"] as const).map((t) => (
+            <button
+              key={t}
+              className={`btn ${theme === t ? "" : "secondary"}`}
+              onClick={() => setTheme(t)}
+            >
+              {t[0].toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Paths</h2>
+        <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+          <p>
+            Developer Disk Images: <code>~/linkdrop/ddi/</code> (override
+            with <code>LINKDROP_DDI_DIR</code>).
+          </p>
+          <p>
+            Cross-platform tip: linkdrop auto-detects the pipx-installed{" "}
+            <code>pymobiledevice3</code> at <code>~/.local/share/pipx</code>{" "}
+            (Linux), <code>~/.local/pipx</code> (macOS), or{" "}
+            <code>%USERPROFILE%/pipx</code> (Windows). Install with{" "}
+            <code>pipx install pymobiledevice3</code>.
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>About</h2>
+        <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
+          linkdrop v0.6.0 — built with Tauri, React, and pymobiledevice3.
+        </div>
       </div>
     </>
   );
@@ -1063,7 +1290,67 @@ function DiagnosticsPanel({
       )}
 
       <BackupCard udid={udid} transport={transport} />
+      <SysdiagnoseCard udid={udid} transport={transport} />
     </>
+  );
+}
+
+function SysdiagnoseCard({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    if (!udid || !transport) return;
+    let dest: string;
+    try {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: `${await homeDir()}/Downloads`,
+      });
+      if (typeof picked !== "string") return;
+      dest = picked;
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    setRunning(true);
+    setError(null);
+    try {
+      await api.pullSysdiagnose(udid, transport, dest);
+      alert(`Sysdiagnose pulled → ${dest}`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Sysdiagnose</h2>
+      <p className="sub" style={{ marginTop: -4, marginBottom: 10, fontSize: 12 }}>
+        Triggers iOS to generate a fresh sysdiagnose bundle and pulls it. Larger
+        than crash reports; useful for reporting iOS issues to Apple or
+        debugging kernel panics.
+      </p>
+      {error && <div className="error">{error}</div>}
+      <div className="row">
+        <button
+          className="btn"
+          onClick={run}
+          disabled={!udid || !transport || running}
+        >
+          {running ? "Generating + pulling… (can take minutes)" : "Pull sysdiagnose"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1079,10 +1366,23 @@ function BackupCard({
 
   const backup = async () => {
     if (!udid || !transport) return;
+    let baseDir: string;
+    try {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: `${await homeDir()}/Backups`,
+      });
+      if (typeof picked !== "string") return; // cancelled
+      baseDir = picked;
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
     setRunning(true);
     setError(null);
     try {
-      const dest = `${await homeDir()}/Backups/linkdrop-${udid.slice(0, 8)}-${Date.now()}`;
+      const dest = `${baseDir}/linkdrop-${udid.slice(0, 8)}-${Date.now()}`;
       await api.createBackup(udid, transport, dest);
       alert(`Backup saved: ${dest}`);
     } catch (e) {
@@ -1223,6 +1523,26 @@ function NotificationsPanel({
             disabled={lines.length === 0}
           >
             Clear
+          </button>
+          <button
+            className="btn secondary"
+            onClick={async () => {
+              if (lines.length === 0) return;
+              try {
+                const picked = await saveDialog({
+                  defaultPath: `syslog-${Date.now()}.txt`,
+                  filters: [{ name: "Text", extensions: ["txt", "log"] }],
+                });
+                if (typeof picked !== "string") return;
+                await api.saveSyslogToFile(picked, lines.join("\n") + "\n");
+                alert(`Saved ${lines.length} lines → ${picked}`);
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+            disabled={lines.length === 0}
+          >
+            Save…
           </button>
         </div>
       </div>
