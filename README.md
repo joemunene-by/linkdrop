@@ -19,6 +19,10 @@ on Linux/Windows. No jailbreak. No cloud.
 
 </div>
 
+<p align="center">
+  <img src="docs/demo.gif" alt="linkdrop demo — Refresh, Photos, Apps, Device, Take screenshot" width="80%" />
+</p>
+
 ---
 
 ## Quick start (~5 min)
