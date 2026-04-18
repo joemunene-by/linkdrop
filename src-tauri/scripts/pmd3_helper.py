@@ -14,6 +14,8 @@ Usage:
   pmd3_helper.py wifi-enable <udid>    # flips EnableWifiConnections
   pmd3_helper.py screenshot <udid> <path>  # writes PNG; prints {path,bytes}
   pmd3_helper.py apps <udid>           # prints [{bundle_id,name,version}] for user apps
+  pmd3_helper.py list-photos <udid> [limit]  # list DCIM entries via AFC
+  pmd3_helper.py pull-photo <udid> <remote> <local>  # download one DCIM file
 """
 
 import asyncio
@@ -23,6 +25,7 @@ import sys
 from pathlib import Path
 
 from pymobiledevice3.lockdown import get_mobdev2_lockdowns
+from pymobiledevice3.services.afc import AfcService
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
 from pymobiledevice3.services.mobile_image_mounter import DeveloperDiskImageMounter
 from pymobiledevice3.services.screenshot import ScreenshotService
@@ -102,6 +105,46 @@ async def cmd_wifi_enable(udid: str) -> None:
     print(json.dumps({"ok": True}))
 
 
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".gif", ".webp"}
+VIDEO_EXTS = {".mov", ".mp4", ".m4v"}
+
+
+async def cmd_list_photos(udid: str, limit: int) -> None:
+    lockdown = await first_lockdown(udid)
+    out: list[dict] = []
+    async with AfcService(lockdown) as afc:
+        async for root, _dirs, files in afc.walk("/DCIM"):
+            for name in files:
+                if len(out) >= limit:
+                    break
+                ext = os.path.splitext(name)[1].lower()
+                if ext in IMAGE_EXTS:
+                    kind = "image"
+                elif ext in VIDEO_EXTS:
+                    kind = "video"
+                else:
+                    continue
+                path = f"{root}/{name}" if not root.endswith("/") else f"{root}{name}"
+                try:
+                    st = await afc.stat(path)
+                    size = int(st.get("st_size", 0))
+                except Exception:
+                    size = 0
+                out.append(
+                    {"path": path, "name": name, "size_bytes": size, "kind": kind}
+                )
+            if len(out) >= limit:
+                break
+    print(json.dumps(out))
+
+
+async def cmd_pull_photo(udid: str, remote: str, local: str) -> None:
+    lockdown = await first_lockdown(udid)
+    async with AfcService(lockdown) as afc:
+        await afc.pull(remote, local)
+    print(json.dumps({"path": local}))
+
+
 async def cmd_apps(udid: str) -> None:
     lockdown = await first_lockdown(udid)
     service = InstallationProxyService(lockdown)
@@ -167,6 +210,16 @@ def main(argv: list[str]) -> int:
             print("usage: pmd3_helper.py screenshot <udid> <output-path>", file=sys.stderr)
             return 2
         asyncio.run(cmd_screenshot(udid, argv[3]))
+        return 0
+    if op == "list-photos":
+        limit = int(argv[3]) if len(argv) >= 4 else 200
+        asyncio.run(cmd_list_photos(udid, limit))
+        return 0
+    if op == "pull-photo":
+        if len(argv) < 5:
+            print("usage: pmd3_helper.py pull-photo <udid> <remote> <local>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_pull_photo(udid, argv[3], argv[4]))
         return 0
     handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable, "apps": cmd_apps}
     if op not in handlers:

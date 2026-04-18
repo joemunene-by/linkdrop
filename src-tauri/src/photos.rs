@@ -86,7 +86,22 @@ pub fn unmount_device() -> Result<()> {
 }
 
 #[tauri::command]
-pub fn list_photos(limit: Option<usize>) -> Result<Vec<PhotoEntry>> {
+pub fn list_photos(
+    udid: Option<String>,
+    transport: Option<Transport>,
+    limit: Option<usize>,
+) -> Result<Vec<PhotoEntry>> {
+    if matches!(transport, Some(Transport::Wifi)) {
+        let udid = udid.ok_or_else(|| LinkdropError::ParseError {
+            tool: "list_photos".into(),
+            detail: "udid required for Wi-Fi transport".into(),
+        })?;
+        return list_photos_wifi(&udid, limit.unwrap_or(200));
+    }
+    list_photos_usb(limit.unwrap_or(500))
+}
+
+fn list_photos_usb(limit: usize) -> Result<Vec<PhotoEntry>> {
     let mount_point = ensure_mount_point()?;
     let dcim = mount_point.join("DCIM");
     if !dcim.exists() {
@@ -96,7 +111,6 @@ pub fn list_photos(limit: Option<usize>) -> Result<Vec<PhotoEntry>> {
         });
     }
 
-    let limit = limit.unwrap_or(500);
     let mut entries: Vec<PhotoEntry> = Vec::new();
 
     walk_dir(&dcim, &mut |p| {
@@ -126,6 +140,38 @@ pub fn list_photos(limit: Option<usize>) -> Result<Vec<PhotoEntry>> {
     });
 
     Ok(entries)
+}
+
+fn list_photos_wifi(udid: &str, limit: usize) -> Result<Vec<PhotoEntry>> {
+    let stdout = crate::pmd3::run_with_args("list-photos", &[udid, &limit.to_string()])?;
+
+    #[derive(serde::Deserialize)]
+    struct WireEntry {
+        path: String,
+        name: String,
+        size_bytes: u64,
+        kind: String,
+    }
+
+    let wire: Vec<WireEntry> = serde_json::from_str(stdout.trim()).map_err(|e| {
+        LinkdropError::ParseError {
+            tool: "pmd3_helper list-photos".into(),
+            detail: format!("bad JSON: {e}"),
+        }
+    })?;
+
+    Ok(wire
+        .into_iter()
+        .map(|w| PhotoEntry {
+            path: w.path,
+            name: w.name,
+            size_bytes: w.size_bytes,
+            kind: match w.kind.as_str() {
+                "video" => "video",
+                _ => "image",
+            },
+        })
+        .collect())
 }
 
 fn walk_dir(root: &Path, visit: &mut impl FnMut(&Path)) {

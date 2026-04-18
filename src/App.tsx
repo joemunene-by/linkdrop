@@ -204,8 +204,8 @@ function DevicePanel({
           }}
         >
           <strong style={{ color: "var(--text)" }}>Wi-Fi mode:</strong>{" "}
-          Device info + screenshot go through <code>pymobiledevice3</code>.
-          Photos (<code>ifuse</code>) still needs USB.
+          Device info, screenshot, photos, and apps all go through{" "}
+          <code>pymobiledevice3</code>. No cable needed.
         </div>
       )}
 
@@ -336,10 +336,17 @@ function PhotosPanel({
     setLoading(true);
     setError(null);
     try {
-      await api.mountDevice(udid, transport);
-      setMounted(true);
-      const items = await api.listPhotos(200);
-      setPhotos(items);
+      if (transport === "wifi") {
+        // AFC over Wi-Fi — no ifuse mount needed
+        const items = await api.listPhotos(udid, transport, 200);
+        setPhotos(items);
+        setMounted(true);
+      } else {
+        await api.mountDevice(udid, transport);
+        const items = await api.listPhotos(udid, transport, 200);
+        setPhotos(items);
+        setMounted(true);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -348,24 +355,24 @@ function PhotosPanel({
   };
 
   const unmount = async () => {
-    try {
-      await api.unmountDevice();
-    } catch (e) {
-      setError(String(e));
+    if (transport === "usb") {
+      try {
+        await api.unmountDevice();
+      } catch (e) {
+        setError(String(e));
+      }
     }
     setMounted(false);
     setPhotos([]);
   };
 
   useEffect(() => {
-    // Don't auto-mount; require explicit button press (mounting is visible to the OS).
     return () => {
-      if (mounted) {
+      if (mounted && transport === "usb") {
         api.unmountDevice().catch(() => {});
       }
     };
-
-  }, [mounted]);
+  }, [mounted, transport]);
 
   return (
     <>
@@ -381,14 +388,20 @@ function PhotosPanel({
             onClick={mount}
             disabled={!udid || !transport || mounted || loading}
           >
-            {mounted ? "Mounted" : "Mount device"}
+            {mounted
+              ? transport === "wifi"
+                ? "Loaded"
+                : "Mounted"
+              : transport === "wifi"
+                ? "Load photos"
+                : "Mount device"}
           </button>
           <button
             className="btn secondary"
             onClick={unmount}
             disabled={!mounted}
           >
-            Unmount
+            {transport === "wifi" ? "Clear" : "Unmount"}
           </button>
           {loading && <span style={{ color: "var(--text-dim)" }}>Reading…</span>}
           {mounted && (

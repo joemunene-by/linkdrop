@@ -17,7 +17,11 @@ export const api = {
   mountDevice: (udid: string, transport: Transport) =>
     invoke<MountResult>("mount_device", { udid, transport }),
   unmountDevice: () => invoke<void>("unmount_device"),
-  listPhotos: (limit = 200) => invoke<PhotoEntry[]>("list_photos", { limit }),
+  listPhotos: (
+    udid: string | null,
+    transport: Transport | null,
+    limit = 200,
+  ) => invoke<PhotoEntry[]>("list_photos", { udid, transport, limit }),
   takeScreenshot: (udid: string, transport: Transport, outputDir: string) =>
     invoke<ScreenshotResult>("take_screenshot", { udid, transport, outputDir }),
   startAirplay: (serverName?: string) =>
