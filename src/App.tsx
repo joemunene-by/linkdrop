@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "./ipc";
 import type {
   DeviceInfo,
@@ -9,12 +10,13 @@ import type {
   Transport,
 } from "./types";
 
-type Tab = "device" | "photos" | "mirror";
+type Tab = "device" | "photos" | "mirror" | "notifications";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "device", label: "Device" },
   { key: "photos", label: "Photos" },
   { key: "mirror", label: "Screen mirror" },
+  { key: "notifications", label: "Notifications" },
 ];
 
 export default function App() {
@@ -98,6 +100,9 @@ export default function App() {
           <PhotosPanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "mirror" && <MirrorPanel />}
+        {tab === "notifications" && (
+          <NotificationsPanel udid={selectedUdid} transport={selectedTransport} />
+        )}
       </main>
     </div>
   );
@@ -183,8 +188,8 @@ function DevicePanel({
       </p>
       {transport === "wifi" && (
         <div className="error" style={{ borderColor: "var(--text-dim)" }}>
-          Wi-Fi transport: detection only. Device info, photos, and screenshots
-          still need USB — <code>pymobiledevice3</code> integration is the fix.
+          Wi-Fi: device info + screenshot work via <code>pymobiledevice3</code>.
+          Photos (<code>ifuse</code>) still needs USB.
         </div>
       )}
 
@@ -465,6 +470,140 @@ function MirrorPanel() {
           uxplay opens its own window when the iPhone begins mirroring. Requires{" "}
           <code>uxplay</code> on PATH (<code>sudo apt install uxplay</code>).
         </p>
+      </div>
+    </>
+  );
+}
+
+function NotificationsPanel({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
+  const [running, setRunning] = useState(false);
+  const [lines, setLines] = useState<string[]>([]);
+  const [filter, setFilter] = useState(
+    "SpringBoard|UNUserNotification|BulletinBoard|UsageTrackingAgent"
+  );
+  const [error, setError] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const unsub = listen<string>("syslog", (event) => {
+      const line = event.payload;
+      let re: RegExp | null = null;
+      try {
+        re = new RegExp(filter, "i");
+      } catch {
+        re = null;
+      }
+      if (re === null || re.test(line)) {
+        setLines((prev) => [...prev.slice(-500), line]);
+      }
+    });
+    return () => {
+      unsub.then((u) => u()).catch(() => {});
+    };
+  }, [filter]);
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [lines]);
+
+  const start = async () => {
+    if (!udid || !transport) return;
+    setError(null);
+    try {
+      await api.startNotifications(udid, transport);
+      setRunning(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const stop = async () => {
+    try {
+      await api.stopNotifications();
+    } catch (e) {
+      setError(String(e));
+    }
+    setRunning(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      api.stopNotifications().catch(() => {});
+    };
+  }, []);
+
+  return (
+    <>
+      <h1>Notifications</h1>
+      <p className="sub">
+        Tails iOS syslog via <code>idevicesyslog</code> and shows matching lines.
+        Best-effort — iOS doesn't expose a clean notification stream to
+        non-Apple platforms.
+      </p>
+
+      {error && <div className="error">{error}</div>}
+
+      <div className="card">
+        <div className="row">
+          <button
+            className="btn"
+            onClick={start}
+            disabled={!udid || !transport || running}
+          >
+            {running ? "Streaming" : "Start"}
+          </button>
+          <button className="btn secondary" onClick={stop} disabled={!running}>
+            Stop
+          </button>
+          <input
+            style={{
+              flex: 1,
+              padding: "6px 10px",
+              background: "var(--bg-deep)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              fontFamily: "monospace",
+              fontSize: 12,
+            }}
+            placeholder="filter regex"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <button
+            className="btn secondary"
+            onClick={() => setLines([])}
+            disabled={lines.length === 0}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div
+          ref={logRef}
+          style={{
+            fontFamily: "monospace",
+            fontSize: 11,
+            maxHeight: 420,
+            overflowY: "auto",
+            whiteSpace: "pre-wrap",
+            color: "var(--text-dim)",
+          }}
+        >
+          {lines.length === 0 ? (
+            <div className="empty">No events yet.</div>
+          ) : (
+            lines.map((l, i) => <div key={i}>{l}</div>)
+          )}
+        </div>
       </div>
     </>
   );

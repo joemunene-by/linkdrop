@@ -24,4 +24,7 @@ export const api = {
   stopAirplay: () => invoke<AirPlayStatus>("stop_airplay"),
   airplayStatus: () => invoke<AirPlayStatus>("airplay_status"),
   enableWifiSync: (udid: string) => invoke<void>("enable_wifi_sync", { udid }),
+  startNotifications: (udid: string, transport: Transport) =>
+    invoke<void>("start_notifications", { udid, transport }),
+  stopNotifications: () => invoke<void>("stop_notifications"),
 };

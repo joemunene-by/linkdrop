@@ -1,100 +1,95 @@
 #!/usr/bin/env python3
 """linkdrop helper: non-interactive pymobiledevice3 bridge for Wi-Fi ops.
 
-The `pymobiledevice3` CLI's `--mobdev2` mode doesn't filter by UDID and
-falls through to an interactive prompt when multiple IP addresses are
-discovered (IPv4 + IPv6 link-local for the same device). This helper uses
-the library API directly: browse mobdev2, pick the endpoint whose lockdown
-handshake matches the requested UDID, then run the requested op.
+`pymobiledevice3`'s CLI `--mobdev2` mode falls through to an interactive
+prompt when a device advertises multiple addresses; that doesn't work from
+Tauri's non-TTY spawn. This helper uses `get_mobdev2_lockdowns` directly,
+which (a) matches the WiFiMACAddress from mDNS against the pair records
+under ~/.pymobiledevice3/ and (b) returns fully pair-verified
+TcpLockdownClient instances ready for GetValue / SetValue.
 
 Usage:
-  pmd3_helper.py info <udid>                  # prints DeviceInfo-ish JSON on stdout
-  pmd3_helper.py wifi-enable <udid>           # flips EnableWifiConnections
+  pmd3_helper.py list                  # prints [udid, ...] on stdout
+  pmd3_helper.py info <udid>           # prints DeviceInfo JSON on stdout
+  pmd3_helper.py wifi-enable <udid>    # flips EnableWifiConnections
+  pmd3_helper.py screenshot <udid> <path>  # writes PNG; prints {path,bytes}
 """
 
 import asyncio
 import json
 import sys
-from typing import Optional
 
-from pymobiledevice3.bonjour import browse_mobdev2
-from pymobiledevice3.lockdown import create_using_tcp
+from pymobiledevice3.lockdown import get_mobdev2_lockdowns
+from pymobiledevice3.services.screenshot import ScreenshotService
 
 
-async def connect_wifi(udid: str):
-    """Find the mobdev2 endpoint matching `udid`, return a LockdownClient.
+LIST_TIMEOUT = 1.5  # keep short — called from list_devices on a 5 s UI poll
+INFO_TIMEOUT = 4.0
 
-    Prefers IPv4 over IPv6 link-local and deduplicates identical IPs so we
-    don't open 8 TLS sessions for a single device.
-    """
-    services = await browse_mobdev2(timeout=4.0)
-    if not services:
-        raise SystemExit("no mobdev2 devices on LAN")
 
-    seen = set()
-    hosts: list[str] = []
-    for svc in services:
-        for addr in svc.addresses:
-            ip = addr.ip
-            if ip in seen:
-                continue
-            seen.add(ip)
-            hosts.append(ip)
-    # Prefer IPv4 (shorter) first; IPv6 link-local last.
-    hosts.sort(key=lambda h: (":" in h, "%" in h, h))
+async def first_lockdown(udid: str):
+    """Return the first pair-verified Wi-Fi lockdown client for `udid`."""
+    async for _, lockdown in get_mobdev2_lockdowns(
+        udid=udid, only_paired=True, timeout=INFO_TIMEOUT
+    ):
+        return lockdown
+    raise SystemExit(f"no paired Wi-Fi device {udid} found on LAN")
 
-    tried = []
-    for host in hosts:
-        tried.append(host)
+
+async def cmd_list() -> None:
+    seen: list[str] = []
+    async for ident, lockdown in get_mobdev2_lockdowns(
+        only_paired=True, timeout=LIST_TIMEOUT
+    ):
+        udid = (
+            getattr(lockdown, "udid", None)
+            or (lockdown.all_values or {}).get("UniqueDeviceID")
+            or ident
+        )
+        if udid and udid not in seen:
+            seen.append(udid)
         try:
-            client = await create_using_tcp(hostname=host, autopair=True)
-        except Exception as e:
-            print(f"  {host}: {type(e).__name__}: {e}", file=sys.stderr)
-            continue
-        print(f"  {host}: udid={getattr(client, 'udid', None)!r}", file=sys.stderr)
-        if getattr(client, "udid", None) == udid:
-            return client
-        try:
-            await client.close()
+            await lockdown.close()
         except Exception:
             pass
-
-    raise SystemExit(f"no matching device {udid} on LAN; tried {tried}")
+    print(json.dumps(seen))
 
 
 async def cmd_info(udid: str) -> None:
-    client = await connect_wifi(udid)
-    info = await client.all_values()
+    lockdown = await first_lockdown(udid)
+    info = lockdown.all_values or {}
     out = {
-        "udid": client.identifier,
+        "udid": lockdown.udid or udid,
         "name": info.get("DeviceName", ""),
         "model": info.get("ProductName", ""),
         "product_type": info.get("ProductType", ""),
         "ios_version": info.get("ProductVersion", ""),
         "serial": info.get("SerialNumber", ""),
+        "battery_percent": None,
+        "total_bytes": None,
+        "free_bytes": None,
     }
-    # battery + storage are on sub-domains
     try:
-        battery = await client.get_value(
+        battery = await lockdown.get_value(
             domain="com.apple.mobile.battery", key="BatteryCurrentCapacity"
         )
-        out["battery_percent"] = int(battery) if battery is not None else None
+        if battery is not None:
+            out["battery_percent"] = int(battery)
     except Exception:
-        out["battery_percent"] = None
+        pass
     try:
-        du = await client.get_value(domain="com.apple.disk_usage")
-        out["total_bytes"] = du.get("TotalDiskCapacity")
-        out["free_bytes"] = du.get("AmountDataAvailable")
+        du = await lockdown.get_value(domain="com.apple.disk_usage")
+        if isinstance(du, dict):
+            out["total_bytes"] = du.get("TotalDiskCapacity")
+            out["free_bytes"] = du.get("AmountDataAvailable")
     except Exception:
-        out["total_bytes"] = None
-        out["free_bytes"] = None
-
+        pass
     print(json.dumps(out))
 
 
 async def cmd_wifi_enable(udid: str) -> None:
-    client = await connect_wifi(udid)
-    await client.set_value(
+    lockdown = await first_lockdown(udid)
+    await lockdown.set_value(
         domain="com.apple.mobile.wireless_lockdown",
         key="EnableWifiConnections",
         value=True,
@@ -102,18 +97,35 @@ async def cmd_wifi_enable(udid: str) -> None:
     print(json.dumps({"ok": True}))
 
 
+async def cmd_screenshot(udid: str, output_path: str) -> None:
+    lockdown = await first_lockdown(udid)
+    service = ScreenshotService(lockdown)
+    data = await service.take_screenshot()
+    with open(output_path, "wb") as f:
+        f.write(data)
+    print(json.dumps({"path": output_path, "bytes": len(data)}))
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) < 3:
-        print("usage: pmd3_helper.py <info|wifi-enable> <udid>", file=sys.stderr)
+    if len(argv) < 2:
+        print("usage: pmd3_helper.py <list|info|wifi-enable> [<udid>]", file=sys.stderr)
         return 2
-    op, udid = argv[1], argv[2]
-    if op == "info":
-        asyncio.run(cmd_info(udid))
-    elif op == "wifi-enable":
-        asyncio.run(cmd_wifi_enable(udid))
-    else:
+    op = argv[1]
+    udid = argv[2] if len(argv) >= 3 else ""
+    if op == "list":
+        asyncio.run(cmd_list())
+        return 0
+    if op == "screenshot":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py screenshot <udid> <output-path>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_screenshot(udid, argv[3]))
+        return 0
+    handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable}
+    if op not in handlers:
         print(f"unknown op: {op}", file=sys.stderr)
         return 2
+    asyncio.run(handlers[op](udid))
     return 0
 
 

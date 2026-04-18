@@ -4,17 +4,21 @@ mod airplay;
 mod device;
 mod error;
 mod muxd;
+mod notifications;
 mod photos;
+mod pmd3;
 mod screenshot;
 mod wifi_sync;
 
 use airplay::AirPlayState;
+use notifications::NotificationsState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AirPlayState::default())
+        .manage(NotificationsState::default())
         .invoke_handler(tauri::generate_handler![
             device::list_devices,
             device::get_device_info,
@@ -26,6 +30,8 @@ pub fn run() {
             airplay::stop_airplay,
             airplay::airplay_status,
             wifi_sync::enable_wifi_sync,
+            notifications::start_notifications,
+            notifications::stop_notifications,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

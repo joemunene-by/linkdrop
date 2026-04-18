@@ -79,9 +79,17 @@ pub fn list_devices() -> Result<Vec<DeviceSummary>> {
 
 #[tauri::command]
 pub fn get_device_info(udid: String, transport: Transport) -> Result<DeviceInfo> {
+    match transport {
+        Transport::Usb => get_info_usb(&udid),
+        Transport::Wifi => get_info_wifi(&udid),
+    }
+}
+
+fn get_info_usb(udid: &str) -> Result<DeviceInfo> {
+    let transport = Transport::Usb;
     let summary = run(
         "ideviceinfo",
-        &["-u", &udid],
+        &["-u", udid],
         "libimobiledevice-utils",
         transport,
     )?;
@@ -91,17 +99,17 @@ pub fn get_device_info(udid: String, transport: Transport) -> Result<DeviceInfo>
 
     let battery_percent = run(
         "ideviceinfo",
-        &["-u", &udid, "-q", "com.apple.mobile.battery", "-k", "BatteryCurrentCapacity"],
+        &["-u", udid, "-q", "com.apple.mobile.battery", "-k", "BatteryCurrentCapacity"],
         "libimobiledevice-utils",
         transport,
     )
     .ok()
     .and_then(|raw| raw.trim().parse::<u8>().ok());
 
-    let (total_bytes, free_bytes) = read_storage(&udid, transport)?;
+    let (total_bytes, free_bytes) = read_storage(udid, transport)?;
 
     Ok(DeviceInfo {
-        udid,
+        udid: udid.to_string(),
         transport,
         name: get("DeviceName"),
         model: get("ProductName"),
@@ -111,6 +119,33 @@ pub fn get_device_info(udid: String, transport: Transport) -> Result<DeviceInfo>
         battery_percent,
         total_bytes,
         free_bytes,
+    })
+}
+
+fn get_info_wifi(udid: &str) -> Result<DeviceInfo> {
+    let stdout = crate::pmd3::run("info", udid)?;
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).map_err(|e| {
+        LinkdropError::ParseError {
+            tool: "pmd3_helper".into(),
+            detail: format!("bad JSON from helper: {e}"),
+        }
+    })?;
+
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let u8_opt = |k: &str| v.get(k).and_then(|x| x.as_u64()).and_then(|n| u8::try_from(n).ok());
+    let u64_opt = |k: &str| v.get(k).and_then(|x| x.as_u64());
+
+    Ok(DeviceInfo {
+        udid: v.get("udid").and_then(|x| x.as_str()).unwrap_or(udid).to_string(),
+        transport: Transport::Wifi,
+        name: s("name"),
+        model: s("model"),
+        product_type: s("product_type"),
+        ios_version: s("ios_version"),
+        serial: s("serial"),
+        battery_percent: u8_opt("battery_percent"),
+        total_bytes: u64_opt("total_bytes"),
+        free_bytes: u64_opt("free_bytes"),
     })
 }
 

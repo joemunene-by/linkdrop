@@ -29,6 +29,12 @@ pub fn take_screenshot(
     );
     let out_path = dir.join(&filename);
 
+    if transport == Transport::Wifi {
+        let path_str = out_path.to_string_lossy().into_owned();
+        crate::pmd3::run_with_args("screenshot", &[&udid, &path_str])?;
+        return Ok(ScreenshotResult { path: out_path });
+    }
+
     let result = muxd_command("idevicescreenshot", transport)
         .args(["-u", &udid, out_path.to_str().unwrap_or("screenshot.png")])
         .output();
