@@ -22,8 +22,15 @@ No Mac bridge. No jailbreak. No cloud.
 - **Photos** — mount the iPhone's DCIM folder, browse and copy images/videos
 - **Screenshots** — capture the iPhone screen, saved to `~/Pictures/linkdrop`
 - **Screen mirror** — one-click AirPlay receiver so you can mirror your iPhone to your desktop
+- **Wi-Fi detection** — once wireless sync is enabled on the iPhone, the device appears next to USB-connected ones (see status below)
 
-All via USB. iPhone just needs to be plugged in and trusted.
+All core ops run via USB. iPhone just needs to be plugged in and trusted.
+
+## Wi-Fi sync status
+
+Linkdrop supports Wi-Fi *discovery* via a sidecar `netmuxd` daemon: once you click **Enable Wi-Fi sync** in the Device panel while USB-connected, the iPhone shows up in the device picker with a `Wi-Fi` tag whenever it's on the same LAN — no cable needed for detection.
+
+**Current Wi-Fi ops gap**: `ideviceinfo` / `ifuse` / `idevicescreenshot` go through `libimobiledevice` + `netmuxd`'s mux protocol; `netmuxd`'s TCP-host mode only partially implements the `Listen`/`Connect` handlers those tools rely on. Concretely, the Wi-Fi-tagged device appears in the picker but Device Info / Photos / Screenshot will error with `Mux error (-8)` until the device is USB-tethered. The planned fix is to spawn `pymobiledevice3` (pure-Python, native Wi-Fi support) for the Wi-Fi transport instead of libimobiledevice.
 
 ## What it deliberately doesn't do
 

@@ -1,13 +1,12 @@
 //! libimobiledevice wrappers: list paired devices and fetch device info.
 
-use std::process::Command;
-
 use serde::Serialize;
 
 use crate::error::{LinkdropError, Result};
+use crate::muxd::{muxd_command, Transport};
 
-fn run(tool: &'static str, args: &[&str], apt_pkg: &'static str) -> Result<String> {
-    let output = match Command::new(tool).args(args).output() {
+fn run(tool: &'static str, args: &[&str], apt_pkg: &'static str, transport: Transport) -> Result<String> {
+    let output = match muxd_command(tool, transport).args(args).output() {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(LinkdropError::MissingTool(tool, apt_pkg));
@@ -28,11 +27,13 @@ fn run(tool: &'static str, args: &[&str], apt_pkg: &'static str) -> Result<Strin
 #[derive(Debug, Serialize, Clone)]
 pub struct DeviceSummary {
     pub udid: String,
+    pub transport: Transport,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct DeviceInfo {
     pub udid: String,
+    pub transport: Transport,
     pub name: String,
     pub model: String,
     pub product_type: String,
@@ -45,37 +46,63 @@ pub struct DeviceInfo {
 
 #[tauri::command]
 pub fn list_devices() -> Result<Vec<DeviceSummary>> {
-    let stdout = run("idevice_id", &["-l"], "libimobiledevice-utils")?;
-    Ok(stdout
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| DeviceSummary {
-            udid: s.to_string(),
-        })
-        .collect())
+    // USB list via stock usbmuxd.
+    let usb = run("idevice_id", &["-l"], "libimobiledevice-utils", Transport::Usb)
+        .unwrap_or_default();
+
+    // Wi-Fi list via netmuxd. If netmuxd is down, skip silently — USB still works.
+    let wifi = run("idevice_id", &["-n"], "libimobiledevice-utils", Transport::Wifi)
+        .unwrap_or_default();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    for line in usb.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        if seen.insert(line.to_string()) {
+            out.push(DeviceSummary {
+                udid: line.to_string(),
+                transport: Transport::Usb,
+            });
+        }
+    }
+    for line in wifi.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        if seen.insert(line.to_string()) {
+            out.push(DeviceSummary {
+                udid: line.to_string(),
+                transport: Transport::Wifi,
+            });
+        }
+    }
+
+    Ok(out)
 }
 
 #[tauri::command]
-pub fn get_device_info(udid: String) -> Result<DeviceInfo> {
-    let summary = run("ideviceinfo", &["-u", &udid], "libimobiledevice-utils")?;
+pub fn get_device_info(udid: String, transport: Transport) -> Result<DeviceInfo> {
+    let summary = run(
+        "ideviceinfo",
+        &["-u", &udid],
+        "libimobiledevice-utils",
+        transport,
+    )?;
     let values = parse_kv(&summary);
 
     let get = |k: &str| values.get(k).cloned().unwrap_or_default();
 
-    // Battery may live in a separate domain; try that and fall back to the main query.
     let battery_percent = run(
         "ideviceinfo",
         &["-u", &udid, "-q", "com.apple.mobile.battery", "-k", "BatteryCurrentCapacity"],
         "libimobiledevice-utils",
+        transport,
     )
     .ok()
     .and_then(|raw| raw.trim().parse::<u8>().ok());
 
-    let (total_bytes, free_bytes) = read_storage(&udid)?;
+    let (total_bytes, free_bytes) = read_storage(&udid, transport)?;
 
     Ok(DeviceInfo {
         udid,
+        transport,
         name: get("DeviceName"),
         model: get("ProductName"),
         product_type: get("ProductType"),
@@ -97,11 +124,12 @@ fn parse_kv(raw: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-fn read_storage(udid: &str) -> Result<(Option<u64>, Option<u64>)> {
+fn read_storage(udid: &str, transport: Transport) -> Result<(Option<u64>, Option<u64>)> {
     let raw = match run(
         "ideviceinfo",
         &["-u", udid, "-q", "com.apple.disk_usage"],
         "libimobiledevice-utils",
+        transport,
     ) {
         Ok(s) => s,
         Err(_) => return Ok((None, None)),

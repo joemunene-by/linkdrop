@@ -2,11 +2,11 @@
 //! Requires Developer Disk Image mounted (ideviceimagemounter) on recent iOS.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use serde::Serialize;
 
 use crate::error::{LinkdropError, Result};
+use crate::muxd::{muxd_command, Transport};
 
 #[derive(Debug, Serialize)]
 pub struct ScreenshotResult {
@@ -14,7 +14,11 @@ pub struct ScreenshotResult {
 }
 
 #[tauri::command]
-pub fn take_screenshot(udid: String, output_dir: String) -> Result<ScreenshotResult> {
+pub fn take_screenshot(
+    udid: String,
+    transport: Transport,
+    output_dir: String,
+) -> Result<ScreenshotResult> {
     let dir = PathBuf::from(&output_dir);
     std::fs::create_dir_all(&dir)?;
 
@@ -25,7 +29,7 @@ pub fn take_screenshot(udid: String, output_dir: String) -> Result<ScreenshotRes
     );
     let out_path = dir.join(&filename);
 
-    let result = Command::new("idevicescreenshot")
+    let result = muxd_command("idevicescreenshot", transport)
         .args(["-u", &udid, out_path.to_str().unwrap_or("screenshot.png")])
         .output();
 

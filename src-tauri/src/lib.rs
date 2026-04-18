@@ -3,8 +3,10 @@
 mod airplay;
 mod device;
 mod error;
+mod muxd;
 mod photos;
 mod screenshot;
+mod wifi_sync;
 
 use airplay::AirPlayState;
 
@@ -23,6 +25,7 @@ pub fn run() {
             airplay::start_airplay,
             airplay::stop_airplay,
             airplay::airplay_status,
+            wifi_sync::enable_wifi_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

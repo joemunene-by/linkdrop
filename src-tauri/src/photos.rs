@@ -7,6 +7,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::error::{LinkdropError, Result};
+use crate::muxd::{muxd_command, Transport};
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif", "gif", "webp"];
 const VIDEO_EXTENSIONS: &[&str] = &["mov", "mp4", "m4v"];
@@ -46,7 +47,7 @@ fn dirs_cache_home() -> Result<PathBuf> {
 }
 
 #[tauri::command]
-pub fn mount_device(udid: String) -> Result<MountResult> {
+pub fn mount_device(udid: String, transport: Transport) -> Result<MountResult> {
     let mount_point = ensure_mount_point()?;
 
     // Unmount anything stale first (ignore errors).
@@ -54,7 +55,7 @@ pub fn mount_device(udid: String) -> Result<MountResult> {
         .args(["-u", mount_point.to_str().unwrap_or("")])
         .output();
 
-    let output = match Command::new("ifuse")
+    let output = match muxd_command("ifuse", transport)
         .args(["-u", &udid, mount_point.to_str().unwrap_or("")])
         .output()
     {

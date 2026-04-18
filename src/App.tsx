@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
+import { homeDir } from "@tauri-apps/api/path";
 import { api } from "./ipc";
-import type { DeviceInfo, DeviceSummary, PhotoEntry, AirPlayStatus } from "./types";
+import type {
+  DeviceInfo,
+  DeviceSummary,
+  PhotoEntry,
+  AirPlayStatus,
+  Transport,
+} from "./types";
 
 type Tab = "device" | "photos" | "mirror";
 
@@ -15,6 +22,9 @@ export default function App() {
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [selectedUdid, setSelectedUdid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const selectedTransport: Transport | null =
+    devices.find((d) => d.udid === selectedUdid)?.transport ?? null;
 
   const refreshDevices = async () => {
     setError(null);
@@ -69,7 +79,8 @@ export default function App() {
             {devices.length === 0 && <option value="">No iPhone detected</option>}
             {devices.map((d) => (
               <option key={d.udid} value={d.udid}>
-                {d.udid.slice(0, 8)}…{d.udid.slice(-4)}
+                {d.udid.slice(0, 8)}…{d.udid.slice(-4)} —{" "}
+                {d.transport === "usb" ? "USB" : "Wi-Fi"}
               </option>
             ))}
           </select>
@@ -80,8 +91,12 @@ export default function App() {
 
         {error && <div className="error">{error}</div>}
 
-        {tab === "device" && <DevicePanel udid={selectedUdid} />}
-        {tab === "photos" && <PhotosPanel udid={selectedUdid} />}
+        {tab === "device" && (
+          <DevicePanel udid={selectedUdid} transport={selectedTransport} />
+        )}
+        {tab === "photos" && (
+          <PhotosPanel udid={selectedUdid} transport={selectedTransport} />
+        )}
         {tab === "mirror" && <MirrorPanel />}
       </main>
     </div>
@@ -100,26 +115,32 @@ function formatBytes(n: number | null): string {
   return `${value.toFixed(1)} ${units[i]}`;
 }
 
-function DevicePanel({ udid }: { udid: string | null }) {
+function DevicePanel({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!udid) {
+    if (!udid || !transport) {
       setInfo(null);
       return;
     }
     setLoading(true);
     setError(null);
     api
-      .getDeviceInfo(udid)
+      .getDeviceInfo(udid, transport)
       .then(setInfo)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [udid]);
+  }, [udid, transport]);
 
-  if (!udid) {
+  if (!udid || !transport) {
     return (
       <>
         <h1>Device</h1>
@@ -142,7 +163,7 @@ function DevicePanel({ udid }: { udid: string | null }) {
     setError(null);
     try {
       const outDir = `${await homeDir()}/Pictures/linkdrop`;
-      const r = await api.takeScreenshot(udid, outDir);
+      const r = await api.takeScreenshot(udid, transport, outDir);
       alert(`Saved: ${r.path}`);
     } catch (e) {
       setError(String(e));
@@ -151,10 +172,21 @@ function DevicePanel({ udid }: { udid: string | null }) {
 
   return (
     <>
-      <h1>Device</h1>
+      <h1>
+        Device{" "}
+        <span className={`pill ${transport === "usb" ? "ok" : ""}`}>
+          {transport === "usb" ? "USB" : "Wi-Fi"}
+        </span>
+      </h1>
       <p className="sub">
         {info?.name ? `${info.name} — ${info.model}` : "Loading device info…"}
       </p>
+      {transport === "wifi" && (
+        <div className="error" style={{ borderColor: "var(--text-dim)" }}>
+          Wi-Fi transport: detection only. Device info, photos, and screenshots
+          still need USB — <code>pymobiledevice3</code> integration is the fix.
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -238,30 +270,52 @@ function DevicePanel({ udid }: { udid: string | null }) {
             Saves to ~/Pictures/linkdrop/
           </span>
         </div>
+        {transport === "usb" && (
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className="btn secondary"
+              onClick={async () => {
+                setError(null);
+                try {
+                  await api.enableWifiSync(udid);
+                  alert(
+                    "Wi-Fi sync enabled. Unplug the iPhone and it should appear under Wi-Fi within ~30s."
+                  );
+                } catch (e) {
+                  setError(String(e));
+                }
+              }}
+            >
+              Enable Wi-Fi sync
+            </button>
+            <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+              One-time. Keeps the device reachable without a cable.
+            </span>
+          </div>
+        )}
       </div>
     </>
   );
 }
 
-async function homeDir(): Promise<string> {
-  return (
-    (globalThis as unknown as { __TAURI_INTERNALS__?: { env?: { HOME?: string } } })
-      .__TAURI_INTERNALS__?.env?.HOME || "/home"
-  );
-}
-
-function PhotosPanel({ udid }: { udid: string | null }) {
+function PhotosPanel({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const mount = async () => {
-    if (!udid) return;
+    if (!udid || !transport) return;
     setLoading(true);
     setError(null);
     try {
-      await api.mountDevice(udid);
+      await api.mountDevice(udid, transport);
       setMounted(true);
       const items = await api.listPhotos(200);
       setPhotos(items);
@@ -301,7 +355,11 @@ function PhotosPanel({ udid }: { udid: string | null }) {
 
       <div className="card">
         <div className="row">
-          <button className="btn" onClick={mount} disabled={!udid || mounted || loading}>
+          <button
+            className="btn"
+            onClick={mount}
+            disabled={!udid || !transport || mounted || loading}
+          >
             {mounted ? "Mounted" : "Mount device"}
           </button>
           <button

@@ -32,6 +32,7 @@ pub fn start_airplay(
 
     let child = match Command::new("uxplay")
         .args(["-n", &name])
+        .env("GST_REGISTRY_FORK", "no")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()

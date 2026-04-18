@@ -1,9 +1,13 @@
+export type Transport = "usb" | "wifi";
+
 export interface DeviceSummary {
   udid: string;
+  transport: Transport;
 }
 
 export interface DeviceInfo {
   udid: string;
+  transport: Transport;
   name: string;
   model: string;
   product_type: string;
