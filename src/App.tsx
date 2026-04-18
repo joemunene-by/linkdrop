@@ -1166,7 +1166,7 @@ function SettingsPanel({
       <div className="card">
         <h2>About</h2>
         <div style={{ fontSize: 12, color: "var(--text-dim)" }}>
-          linkdrop v0.6.0 — built with Tauri, React, and pymobiledevice3.
+          linkdrop v0.7.0 — built with Tauri, React, and pymobiledevice3.
         </div>
       </div>
     </>

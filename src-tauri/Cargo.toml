@@ -1,6 +1,6 @@
 [package]
 name = "linkdrop"
-version = "0.6.0"
+version = "0.7.0"
 description = "Connect your iPhone to Ubuntu"
 authors = ["Joe Munene"]
 edition = "2021"
