@@ -12,6 +12,7 @@ Usage:
   pmd3_helper.py list                  # prints [udid, ...] on stdout
   pmd3_helper.py info <udid>           # prints DeviceInfo JSON on stdout
   pmd3_helper.py wifi-enable <udid>    # flips EnableWifiConnections
+  pmd3_helper.py mount-ddi <udid>      # auto-mount DeveloperDiskImage (classic or personalized)
   pmd3_helper.py screenshot <udid> <path>  # writes PNG; prints {path,bytes}
   pmd3_helper.py apps <udid>           # prints [{bundle_id,name,version}] for user apps
   pmd3_helper.py list-photos <udid> [limit]  # list DCIM entries via AFC
@@ -30,7 +31,10 @@ from pymobiledevice3.lockdown import get_mobdev2_lockdowns
 from pymobiledevice3.services.afc import AfcService
 from pymobiledevice3.services.house_arrest import HouseArrestService
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
-from pymobiledevice3.services.mobile_image_mounter import DeveloperDiskImageMounter
+from pymobiledevice3.services.mobile_image_mounter import (
+    DeveloperDiskImageMounter,
+    auto_mount,
+)
 from pymobiledevice3.services.screenshot import ScreenshotService
 
 
@@ -236,17 +240,52 @@ def _default_ddi_dir() -> Path:
 
 
 async def ensure_ddi_mounted(lockdown) -> None:
-    mounter = DeveloperDiskImageMounter(lockdown)
-    if await mounter.is_image_mounted(DDI_IMAGE_TYPE):
-        return
-    ddi_dir = _default_ddi_dir()
-    dmg = ddi_dir / "DeveloperDiskImage.dmg"
-    sig = ddi_dir / "DeveloperDiskImage.dmg.signature"
-    if not dmg.exists() or not sig.exists():
-        raise SystemExit(
-            f"DDI not found at {ddi_dir}; expected DeveloperDiskImage.dmg + .signature"
-        )
-    await mounter.mount(dmg, sig)
+    """Make sure the DeveloperDiskImage is mounted for this lockdown session.
+
+    For iOS < 17, prefer a user-supplied DMG/signature at
+    ~/linkdrop/ddi/ (override with LINKDROP_DDI_DIR) — that's the offline
+    path. Otherwise, fall back to pymobiledevice3's `auto_mount`, which
+    dispatches on iOS version: classic DDI for iOS 12-16 (downloaded from
+    its own repo into ~/Xcode.app/...), Personalized DDI for iOS 17+
+    (downloaded into ~/Xcode_iOS_DDI_Personalized/). Both paths cache after
+    the first run so subsequent mounts are fast.
+    """
+    # Read iOS major version from lockdown's cached all_values.
+    try:
+        product_version = (lockdown.all_values or {}).get("ProductVersion", "")
+        major = int(product_version.split(".")[0]) if product_version else 0
+    except Exception:
+        major = 0
+
+    # Cheap short-circuit: if the classic Developer image is already on the
+    # device (leftover from a previous mount), we're done for iOS < 17.
+    if major and major < 17:
+        if await DeveloperDiskImageMounter(lockdown).is_image_mounted(DDI_IMAGE_TYPE):
+            return
+        # Offline path: use ~/linkdrop/ddi/ if present.
+        ddi_dir = _default_ddi_dir()
+        dmg = ddi_dir / "DeveloperDiskImage.dmg"
+        sig = ddi_dir / "DeveloperDiskImage.dmg.signature"
+        if dmg.exists() and sig.exists():
+            await DeveloperDiskImageMounter(lockdown).mount(dmg, sig)
+            return
+
+    # Online fallback — works for both iOS < 17 (classic) and iOS 17+
+    # (personalized). First run downloads a ~20 MB classic image, or a
+    # ~1.4 GB personalized image. After that, cached locally.
+    from pymobiledevice3.exceptions import AlreadyMountedError
+
+    try:
+        await auto_mount(lockdown)
+    except AlreadyMountedError:
+        pass
+
+
+async def cmd_mount_ddi(udid: str) -> None:
+    lockdown = await first_lockdown(udid)
+    await ensure_ddi_mounted(lockdown)
+    product = (lockdown.all_values or {}).get("ProductVersion", "unknown")
+    print(json.dumps({"ok": True, "ios": product}))
 
 
 async def cmd_screenshot(udid: str, output_path: str) -> None:
@@ -297,7 +336,12 @@ def main(argv: list[str]) -> int:
             return 2
         asyncio.run(cmd_pull_app_file(udid, argv[3], argv[4], argv[5]))
         return 0
-    handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable, "apps": cmd_apps}
+    handlers = {
+        "info": cmd_info,
+        "wifi-enable": cmd_wifi_enable,
+        "apps": cmd_apps,
+        "mount-ddi": cmd_mount_ddi,
+    }
     if op not in handlers:
         print(f"unknown op: {op}", file=sys.stderr)
         return 2

@@ -26,6 +26,23 @@ No Mac bridge. No jailbreak. No cloud.
 
 All core ops run via USB. iPhone just needs to be plugged in and trusted.
 
+## Supported iOS versions
+
+| iOS range | Device info | Photos | Screenshot | Apps / browser | Wi-Fi sync | Mirror |
+|---|---|---|---|---|---|---|
+| **iOS 12 – 16** (tested: 15.8.7 / iPhone 6s) | ✅ | ✅ | ✅ classic DDI | ✅ | ✅ | ✅ |
+| **iOS 17+** | ✅ | ✅ | ✅ Personalized DDI *(first mount auto-downloads ~1.4 GB)* | ✅ | ✅ | ✅ |
+| iOS 10 – 11 | ⚠️ USB only (pymobiledevice3 ≥ 12) | ⚠️ USB only | ⚠️ | ⚠️ | ❌ | ✅ |
+| iOS ≤ 9 | ❌ (libimobiledevice doesn't pair cleanly) |
+
+Hardware: **iPhone 5s or newer** (A7+), all iPads. USB-C iPhones (15/16) work identically to Lightning.
+
+Screenshot uses a Developer Disk Image that's specific to the iOS major version:
+- **iOS < 17:** classic DMG + signature. linkdrop looks first in `~/linkdrop/ddi/` (drop your own files there for offline use); otherwise pymobiledevice3 fetches from its repo into `~/Xcode.app/…/DeviceSupport/<ver>/`.
+- **iOS ≥ 17:** Personalized DDI. pymobiledevice3 fetches `Image.dmg` + `BuildManifest.plist` + trustcache once into `~/Xcode_iOS_DDI_Personalized/` and mounts from there.
+
+Either way it's automatic — just click **Take screenshot** and it handles mounting if needed.
+
 ## Wi-Fi sync
 
 Click **Enable Wi-Fi sync** in the Device panel while USB-connected (one-time setup — flips iPhone's `EnableWifiConnections` lockdown flag via the [idevice](https://crates.io/crates/idevice) crate). After that, linkdrop talks to the iPhone through `pymobiledevice3` whenever the device is on the same LAN: Device Info, Screenshot, Apps listing, and Photos browsing all work cableless. Developer Disk Image auto-mounts from `~/linkdrop/ddi/` (override with `LINKDROP_DDI_DIR`) whenever it's missing — iOS forgets the mount on reboot, so linkdrop quietly re-uploads it the first time you take a Wi-Fi screenshot after the iPhone restarts.
