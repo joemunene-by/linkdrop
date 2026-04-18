@@ -1,6 +1,7 @@
 //! linkdrop backend — Tauri commands that wrap libimobiledevice + uxplay.
 
 mod airplay;
+mod apps;
 mod device;
 mod error;
 mod muxd;
@@ -32,6 +33,7 @@ pub fn run() {
             wifi_sync::enable_wifi_sync,
             notifications::start_notifications,
             notifications::stop_notifications,
+            apps::list_apps,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

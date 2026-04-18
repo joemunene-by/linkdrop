@@ -13,6 +13,7 @@ Usage:
   pmd3_helper.py info <udid>           # prints DeviceInfo JSON on stdout
   pmd3_helper.py wifi-enable <udid>    # flips EnableWifiConnections
   pmd3_helper.py screenshot <udid> <path>  # writes PNG; prints {path,bytes}
+  pmd3_helper.py apps <udid>           # prints [{bundle_id,name,version}] for user apps
 """
 
 import asyncio
@@ -20,6 +21,7 @@ import json
 import sys
 
 from pymobiledevice3.lockdown import get_mobdev2_lockdowns
+from pymobiledevice3.services.installation_proxy import InstallationProxyService
 from pymobiledevice3.services.screenshot import ScreenshotService
 
 
@@ -97,6 +99,23 @@ async def cmd_wifi_enable(udid: str) -> None:
     print(json.dumps({"ok": True}))
 
 
+async def cmd_apps(udid: str) -> None:
+    lockdown = await first_lockdown(udid)
+    service = InstallationProxyService(lockdown)
+    apps = await service.get_apps(application_type="User")
+    out = []
+    for bundle_id, meta in apps.items():
+        out.append(
+            {
+                "bundle_id": bundle_id,
+                "name": meta.get("CFBundleDisplayName") or meta.get("CFBundleName") or bundle_id,
+                "version": meta.get("CFBundleShortVersionString") or meta.get("CFBundleVersion") or "",
+            }
+        )
+    out.sort(key=lambda a: a["name"].lower())
+    print(json.dumps(out))
+
+
 async def cmd_screenshot(udid: str, output_path: str) -> None:
     lockdown = await first_lockdown(udid)
     service = ScreenshotService(lockdown)
@@ -121,7 +140,7 @@ def main(argv: list[str]) -> int:
             return 2
         asyncio.run(cmd_screenshot(udid, argv[3]))
         return 0
-    handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable}
+    handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable, "apps": cmd_apps}
     if op not in handlers:
         print(f"unknown op: {op}", file=sys.stderr)
         return 2

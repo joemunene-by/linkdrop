@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./ipc";
 import type {
+  AppEntry,
   DeviceInfo,
   DeviceSummary,
   PhotoEntry,
@@ -10,11 +11,12 @@ import type {
   Transport,
 } from "./types";
 
-type Tab = "device" | "photos" | "mirror" | "notifications";
+type Tab = "device" | "photos" | "apps" | "mirror" | "notifications";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "device", label: "Device" },
   { key: "photos", label: "Photos" },
+  { key: "apps", label: "Apps" },
   { key: "mirror", label: "Screen mirror" },
   { key: "notifications", label: "Notifications" },
 ];
@@ -98,6 +100,9 @@ export default function App() {
         )}
         {tab === "photos" && (
           <PhotosPanel udid={selectedUdid} transport={selectedTransport} />
+        )}
+        {tab === "apps" && (
+          <AppsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "mirror" && <MirrorPanel />}
         {tab === "notifications" && (
@@ -187,8 +192,19 @@ function DevicePanel({
         {info?.name ? `${info.name} — ${info.model}` : "Loading device info…"}
       </p>
       {transport === "wifi" && (
-        <div className="error" style={{ borderColor: "var(--text-dim)" }}>
-          Wi-Fi: device info + screenshot work via <code>pymobiledevice3</code>.
+        <div
+          style={{
+            padding: "10px 14px",
+            marginBottom: 12,
+            background: "rgba(138, 43, 226, 0.08)",
+            border: "1px solid rgba(138, 43, 226, 0.35)",
+            borderRadius: 6,
+            color: "var(--text-dim)",
+            fontSize: 12,
+          }}
+        >
+          <strong style={{ color: "var(--text)" }}>Wi-Fi mode:</strong>{" "}
+          Device info + screenshot go through <code>pymobiledevice3</code>.
           Photos (<code>ifuse</code>) still needs USB.
         </div>
       )}
@@ -471,6 +487,117 @@ function MirrorPanel() {
           <code>uxplay</code> on PATH (<code>sudo apt install uxplay</code>).
         </p>
       </div>
+    </>
+  );
+}
+
+function AppsPanel({
+  udid,
+  transport,
+}: {
+  udid: string | null;
+  transport: Transport | null;
+}) {
+  const [apps, setApps] = useState<AppEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  const load = async () => {
+    if (!udid || !transport) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await api.listApps(udid, transport);
+      setApps(list);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? apps.filter(
+        (a) =>
+          a.name.toLowerCase().includes(q) ||
+          a.bundle_id.toLowerCase().includes(q),
+      )
+    : apps;
+
+  return (
+    <>
+      <h1>Apps</h1>
+      <p className="sub">
+        User-installed apps on the iPhone, via{" "}
+        <code>installation_proxy</code>. Click Load to fetch.
+      </p>
+
+      {error && <div className="error">{error}</div>}
+
+      <div className="card">
+        <div className="row">
+          <button
+            className="btn"
+            onClick={load}
+            disabled={!udid || !transport || loading}
+          >
+            {loading ? "Loading…" : apps.length > 0 ? "Reload" : "Load"}
+          </button>
+          <input
+            style={{
+              flex: 1,
+              padding: "6px 10px",
+              background: "var(--bg-deep)",
+              color: "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+            placeholder="Filter by name or bundle id"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            disabled={apps.length === 0}
+          />
+          {apps.length > 0 && (
+            <span className="pill ok">{filtered.length} / {apps.length}</span>
+          )}
+        </div>
+      </div>
+
+      {apps.length > 0 && (
+        <div className="card">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr auto",
+              gap: "4px 16px",
+              fontSize: 13,
+            }}
+          >
+            {filtered.map((a) => (
+              <Fragment key={a.bundle_id}>
+                <div>
+                  <div style={{ color: "var(--text)" }}>{a.name}</div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-dim)",
+                      fontFamily: "monospace",
+                    }}
+                  >
+                    {a.bundle_id}
+                  </div>
+                </div>
+                <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
+                  {a.version}
+                </div>
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }

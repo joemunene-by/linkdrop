@@ -34,3 +34,9 @@ export interface ScreenshotResult {
 }
 
 export type AirPlayStatus = "Running" | "Stopped";
+
+export interface AppEntry {
+  bundle_id: string;
+  name: string;
+  version: string;
+}
