@@ -72,14 +72,21 @@ Device Service) + Python, then the `.msi`. Full per-OS breakdown below.
 
 Every op works on both USB and Wi-Fi. One codepath, all platforms.
 
-## Supported iOS versions
+## Compatibility
+
+### Phones
+
+linkdrop supports **iPhone and iPad — iOS 12 through iOS 18**. Android
+is on the roadmap but not shipped yet; the `adb` / `scrcpy` adapter code
+lives in commit `14c35cf` and will return on a dedicated branch.
 
 | iOS range | Device info | Photos | Screenshot | Apps / browser | Wi-Fi sync | Mirror |
 |---|---|---|---|---|---|---|
 | **iOS 12 – 16** (tested: 15.8.7 / iPhone 6s) | ✅ | ✅ | ✅ classic DDI | ✅ | ✅ | ✅ |
 | **iOS 17+** | ✅ | ✅ | ✅ Personalized DDI *(first mount auto-downloads ~1.4 GB)* | ✅ | ✅ | ✅ |
 | iOS 10 – 11 | ⚠️ USB only (pymobiledevice3 ≥ 12) | ⚠️ USB only | ⚠️ | ⚠️ | ❌ | ✅ |
-| iOS ≤ 9 | ❌ (libimobiledevice doesn't pair cleanly) |
+| iOS ≤ 9 | ❌ (libimobiledevice doesn't pair cleanly) | | | | | |
+| **Android** | 🚧 planned (v0.8) | 🚧 | 🚧 | 🚧 | N/A | 🚧 |
 
 Hardware: **iPhone 5s or newer** (A7+), all iPads. USB-C iPhones (15/16) work identically to Lightning.
 
@@ -88,6 +95,26 @@ Screenshot uses a Developer Disk Image that's specific to the iOS major version:
 - **iOS ≥ 17:** Personalized DDI. pymobiledevice3 fetches `Image.dmg` + `BuildManifest.plist` + trustcache once into `~/Xcode_iOS_DDI_Personalized/` and mounts from there.
 
 Either way it's automatic — just click **Take screenshot** and it handles mounting if needed.
+
+### Host operating systems
+
+linkdrop ships as a native desktop app (Tauri) for all three major
+desktops. Every feature works the same way across them; only the
+install steps differ.
+
+| Host OS | Tested | Bundle | Install command | Notes |
+|---|---|---|---|---|
+| **Ubuntu / Debian** (GTK 3 + WebKit2GTK 4.1) | 24.04 | `.deb`, `.AppImage` | `sudo dpkg -i linkdrop_*.deb` | Needs `libwebkit2gtk-4.1`, `libayatana-appindicator3`. |
+| **Fedora / RHEL** (GTK 3 + WebKit2GTK 4.1) | — | `.rpm`, `.AppImage` | `sudo dnf install linkdrop-*.rpm` | Same GTK/WebKit runtime as Ubuntu. |
+| **Arch / Manjaro** | — | `.AppImage` | `chmod +x linkdrop-*.AppImage && ./linkdrop-*.AppImage` | AUR package planned in v0.9. |
+| **macOS 13+** (Intel) | — | `.dmg`, `.app` | Double-click `.dmg`, drag to Applications | Uses native AirPlay receiver; Apple Mobile Device Service ships with macOS. |
+| **macOS 14+** (Apple Silicon / arm64) | — | `.dmg`, `.app` | Same as Intel | Separate arm64 artifact in the Release. |
+| **Windows 10 / 11** (x64) | — | `.msi`, `.exe` (NSIS) | Run the installer | Needs iTunes installed (ships Apple Mobile Device Service). |
+
+"Tested" = the host we've actually run the full iOS flow on during
+development. The others compile clean in CI (GitHub Actions matrix) but
+haven't had hands-on QA yet — report issues on the tracker if anything
+behaves oddly.
 
 ## Wi-Fi sync
 
@@ -119,36 +146,66 @@ If these are critical to you, you need a Mac in the loop. If they're not, linkdr
 linkdrop drives a small Python helper that calls `pymobiledevice3` for
 everything iPhone-related. One toolchain, three OSes:
 
-**Linux (Debian / Ubuntu)**
+#### Linux — Ubuntu / Debian / Mint / Pop!_OS
 
 ```bash
-sudo apt install libimobiledevice-utils usbmuxd uxplay pipx
+sudo apt update
+sudo apt install -y libimobiledevice-utils usbmuxd uxplay pipx \
+                    libwebkit2gtk-4.1-0 libayatana-appindicator3-1
 pipx install pymobiledevice3
 ```
 
-**macOS**
+Minimum: `libwebkit2gtk-4.1-0` ≥ 2.40, `usbmuxd` ≥ 1.1.1. `uxplay` is
+optional — only needed for the Screen Mirror tab.
+
+#### Linux — Fedora / RHEL / Rocky
+
+```bash
+sudo dnf install -y libimobiledevice-utils usbmuxd webkit2gtk4.1 \
+                    libappindicator-gtk3 python3-pip pipx
+pipx install pymobiledevice3
+```
+
+`uxplay` isn't in the default Fedora repos; either skip it (Mirror tab
+won't work) or build from [FDH-Dev/UxPlay](https://github.com/FDH-Dev/UxPlay).
+
+#### Linux — Arch / Manjaro
+
+```bash
+sudo pacman -S libimobiledevice usbmuxd uxplay webkit2gtk-4.1 \
+               libayatana-appindicator python-pipx
+pipx install pymobiledevice3
+```
+
+#### macOS — 13 Ventura and newer
 
 ```bash
 brew install libimobiledevice ideviceinstaller pipx
 pipx install pymobiledevice3
 ```
 
-(macOS ships its own usbmuxd via Apple Mobile Device Service — nothing else
-to start. AirPlay is handled natively by macOS itself, so the Screen Mirror
-tab uses an AirPlay receiver only if you have one installed; otherwise the
-system picker works fine.)
+macOS ships Apple Mobile Device Service natively (no `usbmuxd` to
+install). Screen Mirror uses your Mac's built-in AirPlay receiver —
+Control Centre → Screen Mirroring on the iPhone → pick your Mac.
 
-**Windows**
+#### Windows 10 / 11
 
-Install iTunes from Apple (ships Apple Mobile Device Service — linkdrop's
-USB path talks to that). Then:
+1. Install [iTunes from Apple](https://www.apple.com/itunes/download/win64)
+   (not the Microsoft Store edition — the full desktop one ships Apple
+   Mobile Device Service, which linkdrop's USB path talks to).
+2. Install Python + pipx + pymobiledevice3:
 
-```powershell
-winget install Python.Python.3.12
-python -m pip install --user pipx
-python -m pipx ensurepath
-pipx install pymobiledevice3
-```
+   ```powershell
+   winget install -e --id Python.Python.3.12
+   python -m pip install --user pipx
+   python -m pipx ensurepath
+   # close + reopen terminal, then:
+   pipx install pymobiledevice3
+   ```
+
+3. Screen Mirror on Windows requires an AirPlay receiver app
+   (AirServer, Reflector, etc.) — there's no native equivalent to
+   `uxplay`. Everything else works over the iTunes-supplied USB muxer.
 
 ### Optional: Linux-only Wi-Fi discovery via netmuxd
 
