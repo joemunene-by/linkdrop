@@ -39,4 +39,12 @@ export interface AppEntry {
   bundle_id: string;
   name: string;
   version: string;
+  has_file_sharing: boolean;
+}
+
+export interface AppFileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number;
 }

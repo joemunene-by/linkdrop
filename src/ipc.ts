@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AirPlayStatus,
   AppEntry,
+  AppFileEntry,
   DeviceInfo,
   DeviceSummary,
   MountResult,
@@ -34,4 +35,30 @@ export const api = {
   stopNotifications: () => invoke<void>("stop_notifications"),
   listApps: (udid: string, transport: Transport) =>
     invoke<AppEntry[]>("list_apps", { udid, transport }),
+  listAppFiles: (
+    udid: string,
+    transport: Transport,
+    bundleId: string,
+    path: string,
+  ) =>
+    invoke<AppFileEntry[]>("list_app_files", {
+      udid,
+      transport,
+      bundleId,
+      path,
+    }),
+  pullAppFile: (
+    udid: string,
+    transport: Transport,
+    bundleId: string,
+    remote: string,
+    local: string,
+  ) =>
+    invoke<void>("pull_app_file", {
+      udid,
+      transport,
+      bundleId,
+      remote,
+      local,
+    }),
 };

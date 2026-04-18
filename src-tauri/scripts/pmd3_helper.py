@@ -16,6 +16,8 @@ Usage:
   pmd3_helper.py apps <udid>           # prints [{bundle_id,name,version}] for user apps
   pmd3_helper.py list-photos <udid> [limit]  # list DCIM entries via AFC
   pmd3_helper.py pull-photo <udid> <remote> <local>  # download one DCIM file
+  pmd3_helper.py list-app-files <udid> <bundle_id> [path]  # list app sandbox entries
+  pmd3_helper.py pull-app-file <udid> <bundle_id> <remote> <local>  # download from sandbox
 """
 
 import asyncio
@@ -26,6 +28,7 @@ from pathlib import Path
 
 from pymobiledevice3.lockdown import get_mobdev2_lockdowns
 from pymobiledevice3.services.afc import AfcService
+from pymobiledevice3.services.house_arrest import HouseArrestService
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
 from pymobiledevice3.services.mobile_image_mounter import DeveloperDiskImageMounter
 from pymobiledevice3.services.screenshot import ScreenshotService
@@ -145,6 +148,65 @@ async def cmd_pull_photo(udid: str, remote: str, local: str) -> None:
     print(json.dumps({"path": local}))
 
 
+async def cmd_list_app_files(udid: str, bundle_id: str, remote_path: str) -> None:
+    from pymobiledevice3.exceptions import PyMobileDevice3Exception
+
+    lockdown = await first_lockdown(udid)
+    try:
+        afc = await HouseArrestService.create(
+            lockdown, bundle_id=bundle_id, documents_only=True
+        )
+    except PyMobileDevice3Exception as e:
+        if "InstallationLookupFailed" in str(e):
+            raise SystemExit(
+                f"{bundle_id} doesn't expose its sandbox (no UIFileSharingEnabled in its Info.plist)"
+            )
+        raise SystemExit(f"house_arrest failed: {e}")
+    try:
+        try:
+            names = await afc.listdir(remote_path)
+        except Exception as e:
+            raise SystemExit(f"cannot list {remote_path}: {e}")
+        out: list[dict] = []
+        for name in names:
+            if name in (".", ".."):
+                continue
+            sub = remote_path.rstrip("/") + "/" + name
+            try:
+                st = await afc.stat(sub)
+            except Exception:
+                continue
+            is_dir = st.get("st_ifmt") == "S_IFDIR"
+            out.append(
+                {
+                    "name": name,
+                    "path": sub,
+                    "is_dir": is_dir,
+                    "size_bytes": 0 if is_dir else int(st.get("st_size", 0)),
+                }
+            )
+        out.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+        print(json.dumps(out))
+    finally:
+        try:
+            await afc.aclose()
+        except Exception:
+            pass
+
+
+async def cmd_pull_app_file(udid: str, bundle_id: str, remote: str, local: str) -> None:
+    lockdown = await first_lockdown(udid)
+    afc = await HouseArrestService.create(lockdown, bundle_id=bundle_id)
+    try:
+        await afc.pull(remote, local)
+        print(json.dumps({"path": local}))
+    finally:
+        try:
+            await afc.aclose()
+        except Exception:
+            pass
+
+
 async def cmd_apps(udid: str) -> None:
     lockdown = await first_lockdown(udid)
     service = InstallationProxyService(lockdown)
@@ -156,9 +218,10 @@ async def cmd_apps(udid: str) -> None:
                 "bundle_id": bundle_id,
                 "name": meta.get("CFBundleDisplayName") or meta.get("CFBundleName") or bundle_id,
                 "version": meta.get("CFBundleShortVersionString") or meta.get("CFBundleVersion") or "",
+                "has_file_sharing": bool(meta.get("UIFileSharingEnabled", False)),
             }
         )
-    out.sort(key=lambda a: a["name"].lower())
+    out.sort(key=lambda a: (not a["has_file_sharing"], a["name"].lower()))
     print(json.dumps(out))
 
 
@@ -220,6 +283,19 @@ def main(argv: list[str]) -> int:
             print("usage: pmd3_helper.py pull-photo <udid> <remote> <local>", file=sys.stderr)
             return 2
         asyncio.run(cmd_pull_photo(udid, argv[3], argv[4]))
+        return 0
+    if op == "list-app-files":
+        if len(argv) < 4:
+            print("usage: pmd3_helper.py list-app-files <udid> <bundle_id> [path]", file=sys.stderr)
+            return 2
+        path = argv[4] if len(argv) >= 5 else "/"
+        asyncio.run(cmd_list_app_files(udid, argv[3], path))
+        return 0
+    if op == "pull-app-file":
+        if len(argv) < 6:
+            print("usage: pmd3_helper.py pull-app-file <udid> <bundle_id> <remote> <local>", file=sys.stderr)
+            return 2
+        asyncio.run(cmd_pull_app_file(udid, argv[3], argv[4], argv[5]))
         return 0
     handlers = {"info": cmd_info, "wifi-enable": cmd_wifi_enable, "apps": cmd_apps}
     if op not in handlers:

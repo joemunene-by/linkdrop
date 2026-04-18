@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api } from "./ipc";
 import type {
   AppEntry,
+  AppFileEntry,
   DeviceInfo,
   DeviceSummary,
   PhotoEntry,
@@ -515,6 +516,7 @@ function AppsPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [browsing, setBrowsing] = useState<AppEntry | null>(null);
 
   const load = async () => {
     if (!udid || !transport) return;
@@ -539,12 +541,24 @@ function AppsPanel({
       )
     : apps;
 
+  if (browsing && udid && transport) {
+    return (
+      <AppBrowser
+        udid={udid}
+        transport={transport}
+        app={browsing}
+        onBack={() => setBrowsing(null)}
+      />
+    );
+  }
+
   return (
     <>
       <h1>Apps</h1>
       <p className="sub">
         User-installed apps on the iPhone, via{" "}
-        <code>installation_proxy</code>. Click Load to fetch.
+        <code>installation_proxy</code>. Apps with File Sharing enabled show a
+        Browse button.
       </p>
 
       {error && <div className="error">{error}</div>}
@@ -574,7 +588,9 @@ function AppsPanel({
             disabled={apps.length === 0}
           />
           {apps.length > 0 && (
-            <span className="pill ok">{filtered.length} / {apps.length}</span>
+            <span className="pill ok">
+              {filtered.length} / {apps.length}
+            </span>
           )}
         </div>
       </div>
@@ -584,9 +600,10 @@ function AppsPanel({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr auto",
-              gap: "4px 16px",
+              gridTemplateColumns: "1fr auto auto",
+              gap: "6px 16px",
               fontSize: 13,
+              alignItems: "center",
             }}
           >
             {filtered.map((a) => (
@@ -606,11 +623,162 @@ function AppsPanel({
                 <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
                   {a.version}
                 </div>
+                {a.has_file_sharing ? (
+                  <button
+                    className="btn secondary"
+                    style={{ padding: "2px 10px", fontSize: 12 }}
+                    onClick={() => setBrowsing(a)}
+                  >
+                    Browse
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                    —
+                  </span>
+                )}
               </Fragment>
             ))}
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+function AppBrowser({
+  udid,
+  transport,
+  app,
+  onBack,
+}: {
+  udid: string;
+  transport: Transport;
+  app: AppEntry;
+  onBack: () => void;
+}) {
+  const [path, setPath] = useState("/");
+  const [entries, setEntries] = useState<AppFileEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .listAppFiles(udid, transport, app.bundle_id, path)
+      .then((list) => {
+        if (!cancelled) setEntries(list);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [udid, transport, app.bundle_id, path]);
+
+  const openDir = (p: string) => setPath(p);
+  const up = () => {
+    if (path === "/") return;
+    const parts = path.split("/").filter(Boolean);
+    parts.pop();
+    setPath(parts.length ? "/" + parts.join("/") : "/");
+  };
+
+  const download = async (entry: AppFileEntry) => {
+    try {
+      const home = await homeDir();
+      const local = `${home}/Downloads/linkdrop-${app.name}-${entry.name}`;
+      await api.pullAppFile(
+        udid,
+        transport,
+        app.bundle_id,
+        entry.path,
+        local,
+      );
+      alert(`Saved: ${local}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <>
+      <h1>{app.name}</h1>
+      <p className="sub" style={{ fontFamily: "monospace", fontSize: 12 }}>
+        {app.bundle_id} — Documents{path}
+      </p>
+
+      {error && <div className="error">{error}</div>}
+
+      <div className="card">
+        <div className="row">
+          <button className="btn secondary" onClick={onBack}>
+            ← Apps
+          </button>
+          <button
+            className="btn secondary"
+            onClick={up}
+            disabled={path === "/"}
+          >
+            ↑ Up
+          </button>
+          <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--text-dim)" }}>
+            {path}
+          </span>
+          {loading && <span style={{ color: "var(--text-dim)" }}>Loading…</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        {entries.length === 0 && !loading ? (
+          <div className="empty">Empty directory.</div>
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr auto auto",
+              gap: "6px 16px",
+              fontSize: 13,
+              alignItems: "center",
+            }}
+          >
+            {entries.map((e) => (
+              <Fragment key={e.path}>
+                <div
+                  style={{
+                    color: "var(--text)",
+                    cursor: e.is_dir ? "pointer" : "default",
+                  }}
+                  onClick={() => e.is_dir && openDir(e.path)}
+                >
+                  {e.is_dir ? "📁" : "📄"} {e.name}
+                </div>
+                <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
+                  {e.is_dir ? "" : formatBytes(e.size_bytes)}
+                </div>
+                {e.is_dir ? (
+                  <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                    —
+                  </span>
+                ) : (
+                  <button
+                    className="btn secondary"
+                    style={{ padding: "2px 10px", fontSize: 12 }}
+                    onClick={() => download(e)}
+                  >
+                    Download
+                  </button>
+                )}
+              </Fragment>
+            ))}
+          </div>
+        )}
+      </div>
     </>
   );
 }

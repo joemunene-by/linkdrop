@@ -40,6 +40,8 @@ pub fn run() {
             notifications::start_notifications,
             notifications::stop_notifications,
             apps::list_apps,
+            apps::list_app_files,
+            apps::pull_app_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
