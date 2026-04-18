@@ -18,10 +18,13 @@ Usage:
 
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 
 from pymobiledevice3.lockdown import get_mobdev2_lockdowns
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
+from pymobiledevice3.services.mobile_image_mounter import DeveloperDiskImageMounter
 from pymobiledevice3.services.screenshot import ScreenshotService
 
 
@@ -116,8 +119,33 @@ async def cmd_apps(udid: str) -> None:
     print(json.dumps(out))
 
 
+DDI_IMAGE_TYPE = "Developer"
+DDI_DIR_ENV = "LINKDROP_DDI_DIR"
+
+
+def _default_ddi_dir() -> Path:
+    if override := os.environ.get(DDI_DIR_ENV):
+        return Path(override)
+    return Path.home() / "linkdrop" / "ddi"
+
+
+async def ensure_ddi_mounted(lockdown) -> None:
+    mounter = DeveloperDiskImageMounter(lockdown)
+    if await mounter.is_image_mounted(DDI_IMAGE_TYPE):
+        return
+    ddi_dir = _default_ddi_dir()
+    dmg = ddi_dir / "DeveloperDiskImage.dmg"
+    sig = ddi_dir / "DeveloperDiskImage.dmg.signature"
+    if not dmg.exists() or not sig.exists():
+        raise SystemExit(
+            f"DDI not found at {ddi_dir}; expected DeveloperDiskImage.dmg + .signature"
+        )
+    await mounter.mount(dmg, sig)
+
+
 async def cmd_screenshot(udid: str, output_path: str) -> None:
     lockdown = await first_lockdown(udid)
+    await ensure_ddi_mounted(lockdown)
     service = ScreenshotService(lockdown)
     data = await service.take_screenshot()
     with open(output_path, "wb") as f:
