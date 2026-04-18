@@ -8,6 +8,10 @@ A cross-platform Phone-Link-for-iPhone, built around `pymobiledevice3`.
 Tauri + Rust on the backend, React on the front. No Mac bridge required
 on Linux/Windows. No jailbreak. No cloud.
 
+[![Build & Release](https://img.shields.io/github/actions/workflow/status/joemunene-by/linkdrop/release.yml?branch=main&style=flat-square&label=CI)](https://github.com/joemunene-by/linkdrop/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/joemunene-by/linkdrop?style=flat-square&sort=semver)](https://github.com/joemunene-by/linkdrop/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/joemunene-by/linkdrop/total?style=flat-square)](https://github.com/joemunene-by/linkdrop/releases)
+![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue?style=flat-square)
 ![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat-square&logo=tauri&logoColor=black)
 ![Rust](https://img.shields.io/badge/rust-stable-DEA584?style=flat-square&logo=rust&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -16,6 +20,39 @@ on Linux/Windows. No jailbreak. No cloud.
 </div>
 
 ---
+
+## Quick start (~5 min)
+
+```bash
+# 1. One-time runtime deps (Linux example; macOS/Windows below)
+sudo apt install libimobiledevice-utils usbmuxd uxplay pipx
+pipx install pymobiledevice3
+
+# 2. Download the .deb from the latest release
+#    https://github.com/joemunene-by/linkdrop/releases/latest
+sudo dpkg -i ~/Downloads/linkdrop_*_amd64.deb
+
+# 3. Plug iPhone in, unlock, tap Trust — then:
+pymobiledevice3 lockdown pair     # one-time: trust + passcode on iPhone
+
+# 4. Launch linkdrop from the app launcher. Done.
+```
+
+macOS: `brew install libimobiledevice pipx && pipx install pymobiledevice3`,
+then double-click the `.dmg`. Windows: install iTunes (for Apple Mobile
+Device Service) + Python, then the `.msi`. Full per-OS breakdown below.
+
+## Screenshots
+
+<!-- Drop real screenshots at the paths below after next run. -->
+<p align="center">
+  <img src="docs/screenshots/device.png" alt="Device tab" width="45%" />
+  <img src="docs/screenshots/apps.png" alt="Apps tab" width="45%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/photos.png" alt="Photos tab" width="45%" />
+  <img src="docs/screenshots/notifications.png" alt="Notifications tab" width="45%" />
+</p>
 
 ## What it does
 
@@ -233,6 +270,52 @@ auto-poll stops calls from stacking up and freezing the webview.
 
 Devices are sticky for 60 s after their last mDNS sighting, so the
 picker doesn't flicker through Bonjour's bursty announcement windows.
+
+### Daemon protocol
+
+Each Tauri command serializes to one JSON line on the daemon's stdin,
+and reads one matching-`id` response line from stdout:
+
+```jsonc
+// → list every paired device
+{"id": 1, "op": "list", "args": []}
+// ← fast path (session cache primed)
+{"id": 1, "ok": true, "data": [
+  {"udid": "f3712b615c...", "transport": "wifi"}
+]}
+
+// → fetch device info
+{"id": 2, "op": "info", "args": ["f3712b615c..."]}
+{"id": 2, "ok": true, "data": {
+  "udid": "f3712b615c...", "name": "iPhone",
+  "product_type": "iPhone8,1", "ios_version": "15.8.7",
+  "battery_percent": 64,
+  "total_bytes": 64000000000, "free_bytes": 22681038848
+}}
+
+// → error example: stale pair record / mDNS gap
+{"id": 3, "op": "apps", "args": ["..."]}
+{"id": 3, "ok": false, "error": "device ... not found on USB or Wi-Fi"}
+```
+
+You can drive the daemon by hand with
+`echo '{"id":1,"op":"list","args":[]}' | python src-tauri/scripts/pmd3_helper.py daemon` —
+useful for scripting outside the app or debugging a specific command.
+
+## CI / Release pipeline
+
+`.github/workflows/release.yml` builds on every push to `main` and on every
+`v*` tag. Matrix targets: Ubuntu 24.04 (x86_64), macOS 13 (x86_64),
+macOS 14 (aarch64), Windows latest (x86_64). Each job runs
+`bun run tauri build` and uploads its native bundles as a CI artifact
+(`.deb`/`.rpm`/`.AppImage` on Linux, `.dmg`/`.app` on macOS, `.msi`/`.exe`
+on Windows). On a tag, `softprops/action-gh-release` attaches all
+artifacts to the corresponding GitHub Release automatically — no manual
+cutting. Cargo registry + target are cached between runs so non-tag PRs
+turn around in a couple minutes.
+
+Badges at the top of this README reflect the live pipeline state, the
+latest shipped tag, and cumulative download count from the Releases page.
 
 ## Roadmap
 
