@@ -78,25 +78,39 @@ export default function App() {
   const selectedTransport: Transport | null =
     devices.find((d) => d.udid === selectedUdid)?.transport ?? null;
 
+  const [refreshing, setRefreshing] = useState(false);
+  const inflightRef = useRef(false);
+  const selectedUdidRef = useRef(selectedUdid);
+  selectedUdidRef.current = selectedUdid;
+
   const refreshDevices = async () => {
+    if (inflightRef.current) return; // skip overlap — serialize through one call
+    inflightRef.current = true;
+    setRefreshing(true);
     setError(null);
     try {
       const list = await api.listDevices();
       setDevices(list);
-      if (list.length > 0 && !selectedUdid) {
+      const currentlySelected = selectedUdidRef.current;
+      if (list.length > 0 && !currentlySelected) {
         setSelectedUdid(list[0].udid);
       } else if (list.length === 0) {
         setSelectedUdid(null);
       }
     } catch (e) {
       setError(String(e));
+    } finally {
+      inflightRef.current = false;
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     refreshDevices();
-    // Auto-poll disabled — was starving the IPC worker pool. Use the
-    // Refresh button to re-list devices.
+    // Auto-poll at 15 s with an in-flight guard so we never stack calls.
+    // Daemon + session cache make subsequent polls cheap (~100-500 ms).
+    const t = setInterval(refreshDevices, 15000);
+    return () => clearInterval(t);
   }, []);
 
   // Fire-and-forget DDI prime when a device is selected — makes the first
@@ -143,8 +157,12 @@ export default function App() {
               </option>
             ))}
           </select>
-          <button className="btn secondary" onClick={refreshDevices}>
-            Refresh
+          <button
+            className="btn secondary"
+            onClick={refreshDevices}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
 
