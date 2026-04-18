@@ -7,7 +7,6 @@ import type {
   AppEntry,
   AppFileEntry,
   DeviceInfo,
-  DevicePlatform,
   DeviceSummary,
   PhotoEntry,
   AirPlayStatus,
@@ -76,9 +75,8 @@ export default function App() {
     setShowWizard(false);
   };
 
-  const selectedDevice = devices.find((d) => d.udid === selectedUdid) ?? null;
-  const selectedTransport: Transport | null = selectedDevice?.transport ?? null;
-  const selectedPlatform: DevicePlatform | null = selectedDevice?.platform ?? null;
+  const selectedTransport: Transport | null =
+    devices.find((d) => d.udid === selectedUdid)?.transport ?? null;
 
   const refreshDevices = async () => {
     setError(null);
@@ -97,17 +95,16 @@ export default function App() {
 
   useEffect(() => {
     refreshDevices();
-    const t = setInterval(refreshDevices, 5000);
-    return () => clearInterval(t);
-
+    // Auto-poll disabled — was starving the IPC worker pool. Use the
+    // Refresh button to re-list devices.
   }, []);
 
-  // Fire-and-forget DDI prime for iPhones when selected. No-op on Android.
+  // Fire-and-forget DDI prime when a device is selected — makes the first
+  // Wi-Fi screenshot fast and surfaces Personalized-DDI downloads early.
   useEffect(() => {
     if (!selectedUdid || !selectedTransport) return;
-    if (selectedPlatform !== "ios") return;
     api.primeDdi(selectedUdid, selectedTransport).catch(() => {});
-  }, [selectedUdid, selectedTransport, selectedPlatform]);
+  }, [selectedUdid, selectedTransport]);
 
   return (
     <div className="app">
@@ -142,7 +139,6 @@ export default function App() {
             {devices.map((d) => (
               <option key={d.udid} value={d.udid}>
                 {d.udid.slice(0, 8)}…{d.udid.slice(-4)} —{" "}
-                {d.platform === "android" ? "Android" : "iPhone"} /{" "}
                 {d.transport === "usb" ? "USB" : "Wi-Fi"}
               </option>
             ))}
@@ -155,42 +151,20 @@ export default function App() {
         {error && <div className="error">{error}</div>}
 
         {tab === "device" && (
-          <DevicePanel
-            udid={selectedUdid}
-            transport={selectedTransport}
-            platform={selectedPlatform}
-          />
+          <DevicePanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "photos" && (
-          <PhotosPanel
-            udid={selectedUdid}
-            transport={selectedTransport}
-            platform={selectedPlatform}
-          />
+          <PhotosPanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "apps" && (
-          <AppsPanel
-            udid={selectedUdid}
-            transport={selectedTransport}
-            platform={selectedPlatform}
-          />
+          <AppsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
-        {tab === "mirror" && (
-          <MirrorPanel udid={selectedUdid} platform={selectedPlatform} />
-        )}
+        {tab === "mirror" && <MirrorPanel />}
         {tab === "notifications" && (
-          <NotificationsPanel
-            udid={selectedUdid}
-            transport={selectedTransport}
-            platform={selectedPlatform}
-          />
+          <NotificationsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "diagnostics" && (
-          <DiagnosticsPanel
-            udid={selectedUdid}
-            transport={selectedTransport}
-            platform={selectedPlatform}
-          />
+          <DiagnosticsPanel udid={selectedUdid} transport={selectedTransport} />
         )}
         {tab === "settings" && <SettingsPanel theme={theme} setTheme={setTheme} />}
       </main>
@@ -213,31 +187,29 @@ function formatBytes(n: number | null): string {
 function DevicePanel({
   udid,
   transport,
-  platform,
 }: {
   udid: string | null;
   transport: Transport | null;
-  platform: DevicePlatform | null;
 }) {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!udid || !transport || !platform) {
+    if (!udid || !transport) {
       setInfo(null);
       return;
     }
     setLoading(true);
     setError(null);
     api
-      .getDeviceInfo(udid, transport, platform)
+      .getDeviceInfo(udid, transport)
       .then(setInfo)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [udid, transport, platform]);
+  }, [udid, transport]);
 
-  if (!udid || !transport || !platform) {
+  if (!udid || !transport) {
     return (
       <>
         <h1>Device</h1>
@@ -260,7 +232,7 @@ function DevicePanel({
     setError(null);
     try {
       const outDir = `${await homeDir()}/Pictures/linkdrop`;
-      const r = await api.takeScreenshot(udid, transport, platform, outDir);
+      const r = await api.takeScreenshot(udid, transport, outDir);
       alert(`Saved: ${r.path}`);
     } catch (e) {
       setError(String(e));
@@ -271,9 +243,6 @@ function DevicePanel({
     <>
       <h1>
         Device{" "}
-        <span className={`pill ok`}>
-          {platform === "android" ? "Android" : "iPhone"}
-        </span>{" "}
         <span className={`pill ${transport === "usb" ? "ok" : ""}`}>
           {transport === "usb" ? "USB" : "Wi-Fi"}
         </span>
@@ -281,7 +250,7 @@ function DevicePanel({
       <p className="sub">
         {info?.name ? `${info.name} — ${info.model}` : "Loading device info…"}
       </p>
-      {platform === "ios" && transport === "wifi" && (
+      {transport === "wifi" && (
         <div
           style={{
             padding: "10px 14px",
@@ -296,23 +265,6 @@ function DevicePanel({
           <strong style={{ color: "var(--text)" }}>Wi-Fi mode:</strong>{" "}
           Device info, screenshot, photos, and apps all go through{" "}
           <code>pymobiledevice3</code>. No cable needed.
-        </div>
-      )}
-      {platform === "android" && (
-        <div
-          style={{
-            padding: "10px 14px",
-            marginBottom: 12,
-            background: "rgba(56, 142, 60, 0.08)",
-            border: "1px solid rgba(56, 142, 60, 0.35)",
-            borderRadius: 6,
-            color: "var(--text-dim)",
-            fontSize: 12,
-          }}
-        >
-          <strong style={{ color: "var(--text)" }}>Android:</strong> routed
-          through <code>adb</code>. Make sure USB debugging is on and you've
-          accepted the RSA fingerprint prompt on the phone.
         </div>
       )}
 
@@ -335,9 +287,7 @@ function DevicePanel({
               </div>
             </div>
             <div>
-              <div className="label">
-                {platform === "android" ? "Android" : "iOS"}
-              </div>
+              <div className="label">iOS</div>
               <div className="value">{info.ios_version || "—"}</div>
             </div>
             <div>
@@ -431,11 +381,9 @@ function DevicePanel({
 function PhotosPanel({
   udid,
   transport,
-  platform,
 }: {
   udid: string | null;
   transport: Transport | null;
-  platform: DevicePlatform | null;
 }) {
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const [mounted, setMounted] = useState(false);
@@ -443,13 +391,21 @@ function PhotosPanel({
   const [error, setError] = useState<string | null>(null);
 
   const mount = async () => {
-    if (!udid || !transport || !platform) return;
+    if (!udid || !transport) return;
     setLoading(true);
     setError(null);
     try {
-      const items = await api.listPhotos(udid, transport, platform, 200);
-      setPhotos(items);
-      setMounted(true);
+      if (transport === "wifi") {
+        // AFC over Wi-Fi — no ifuse mount needed
+        const items = await api.listPhotos(udid, transport, 200);
+        setPhotos(items);
+        setMounted(true);
+      } else {
+        await api.mountDevice(udid, transport);
+        const items = await api.listPhotos(udid, transport, 200);
+        setPhotos(items);
+        setMounted(true);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -458,12 +414,23 @@ function PhotosPanel({
   };
 
   const unmount = async () => {
+    if (transport === "usb") {
+      try {
+        await api.unmountDevice();
+      } catch (e) {
+        setError(String(e));
+      }
+    }
     setMounted(false);
     setPhotos([]);
   };
 
   useEffect(() => {
-    return () => {};
+    return () => {
+      if (mounted && transport === "usb") {
+        api.unmountDevice().catch(() => {});
+      }
+    };
   }, [mounted, transport]);
 
   return (
@@ -478,16 +445,22 @@ function PhotosPanel({
           <button
             className="btn"
             onClick={mount}
-            disabled={!udid || !transport || !platform || mounted || loading}
+            disabled={!udid || !transport || mounted || loading}
           >
-            {mounted ? "Loaded" : "Load photos"}
+            {mounted
+              ? transport === "wifi"
+                ? "Loaded"
+                : "Mounted"
+              : transport === "wifi"
+                ? "Load photos"
+                : "Mount device"}
           </button>
           <button
             className="btn secondary"
             onClick={unmount}
             disabled={!mounted}
           >
-            Clear
+            {transport === "wifi" ? "Clear" : "Unmount"}
           </button>
           {loading && <span style={{ color: "var(--text-dim)" }}>Reading…</span>}
           {mounted && (
@@ -501,11 +474,10 @@ function PhotosPanel({
           <div className="row" style={{ marginBottom: 12 }}>
             <h2 style={{ margin: 0 }}>DCIM</h2>
             <div style={{ flex: 1 }} />
-            {udid && transport && platform && photos.length > 0 && (
+            {transport === "wifi" && udid && photos.length > 0 && (
               <PhotoBulkDownload
                 udid={udid}
                 transport={transport}
-                platform={platform}
                 photos={photos}
               />
             )}
@@ -519,7 +491,7 @@ function PhotosPanel({
                   <div className="name">{p.name}</div>
                   <div className="kind">{p.kind}</div>
                   <div>{formatBytes(p.size_bytes)}</div>
-                  {udid && transport && platform && (
+                  {transport === "wifi" && udid && (
                     <button
                       className="btn secondary"
                       style={{
@@ -531,13 +503,7 @@ function PhotosPanel({
                       onClick={async () => {
                         try {
                           const dest = `${await homeDir()}/Pictures/linkdrop/${p.name}`;
-                          await api.pullPhoto(
-                            udid,
-                            transport,
-                            platform,
-                            p.path,
-                            dest,
-                          );
+                          await api.pullPhoto(udid, transport, p.path, dest);
                           alert(`Saved: ${dest}`);
                         } catch (e) {
                           setError(String(e));
@@ -560,12 +526,10 @@ function PhotosPanel({
 function PhotoBulkDownload({
   udid,
   transport,
-  platform,
   photos,
 }: {
   udid: string;
   transport: Transport;
-  platform: DevicePlatform;
   photos: PhotoEntry[];
 }) {
   const [progress, setProgress] = useState<{
@@ -583,7 +547,7 @@ function PhotoBulkDownload({
     const base = `${await homeDir()}/Pictures/linkdrop`;
     for (const p of photos) {
       try {
-        await api.pullPhoto(udid, transport, platform, p.path, `${base}/${p.name}`);
+        await api.pullPhoto(udid, transport, p.path, `${base}/${p.name}`);
       } catch {
         errors++;
       }
@@ -614,13 +578,7 @@ function PhotoBulkDownload({
   );
 }
 
-function MirrorPanel({
-  udid,
-  platform,
-}: {
-  udid: string | null;
-  platform: DevicePlatform | null;
-}) {
+function MirrorPanel() {
   const [status, setStatus] = useState<AirPlayStatus>("Stopped");
   const [error, setError] = useState<string | null>(null);
 
@@ -641,13 +599,7 @@ function MirrorPanel({
   const start = async () => {
     setError(null);
     try {
-      setStatus(
-        await api.startAirplay(
-          udid ?? undefined,
-          platform ?? undefined,
-          "linkdrop",
-        ),
-      );
+      setStatus(await api.startAirplay("linkdrop"));
     } catch (e) {
       setError(String(e));
     }
@@ -666,9 +618,8 @@ function MirrorPanel({
     <>
       <h1>Screen mirror</h1>
       <p className="sub">
-        {platform === "android"
-          ? "Starts scrcpy against the selected Android device. Needs `scrcpy` on PATH and USB debugging on the phone."
-          : "Starts an AirPlay receiver (uxplay). Swipe down from the top-right on your iPhone and choose \"linkdrop\" under Screen Mirroring."}
+        Starts an AirPlay receiver (uxplay). Swipe down from the top-right on your iPhone and
+        choose "linkdrop" under Screen Mirroring.
       </p>
 
       {error && <div className="error">{error}</div>}
@@ -691,20 +642,8 @@ function MirrorPanel({
           </button>
         </div>
         <p style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 12 }}>
-          {platform === "android" ? (
-            <>
-              scrcpy opens its own window. Install:{" "}
-              <code>sudo apt install scrcpy</code> /{" "}
-              <code>brew install scrcpy</code> /{" "}
-              <code>winget install Genymobile.scrcpy</code>.
-            </>
-          ) : (
-            <>
-              uxplay opens its own window when the iPhone begins mirroring.
-              Install: <code>sudo apt install uxplay</code> /{" "}
-              <code>brew install uxplay</code>.
-            </>
-          )}
+          uxplay opens its own window when the iPhone begins mirroring. Requires{" "}
+          <code>uxplay</code> on PATH (<code>sudo apt install uxplay</code>).
         </p>
       </div>
     </>
@@ -714,11 +653,9 @@ function MirrorPanel({
 function AppsPanel({
   udid,
   transport,
-  platform,
 }: {
   udid: string | null;
   transport: Transport | null;
-  platform: DevicePlatform | null;
 }) {
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -729,11 +666,11 @@ function AppsPanel({
   const [installing, setInstalling] = useState(false);
 
   const install = async () => {
-    if (!udid || !transport || !platform || !ipaPath.trim()) return;
+    if (!udid || !transport || !ipaPath.trim()) return;
     setInstalling(true);
     setError(null);
     try {
-      await api.installApp(udid, transport, platform, ipaPath.trim());
+      await api.installApp(udid, transport, ipaPath.trim());
       alert(`Installed: ${ipaPath}`);
       setIpaPath("");
       await load();
@@ -745,11 +682,11 @@ function AppsPanel({
   };
 
   const uninstall = async (app: AppEntry) => {
-    if (!udid || !transport || !platform) return;
+    if (!udid || !transport) return;
     if (!confirm(`Uninstall ${app.name}?`)) return;
     setError(null);
     try {
-      await api.uninstallApp(udid, transport, platform, app.bundle_id);
+      await api.uninstallApp(udid, transport, app.bundle_id);
       await load();
     } catch (e) {
       setError(String(e));
@@ -757,11 +694,11 @@ function AppsPanel({
   };
 
   const load = async () => {
-    if (!udid || !transport || !platform) return;
+    if (!udid || !transport) return;
     setLoading(true);
     setError(null);
     try {
-      const list = await api.listApps(udid, transport, platform);
+      const list = await api.listApps(udid, transport);
       setApps(list);
     } catch (e) {
       setError(String(e));
@@ -779,12 +716,11 @@ function AppsPanel({
       )
     : apps;
 
-  if (browsing && udid && transport && platform) {
+  if (browsing && udid && transport) {
     return (
       <AppBrowser
         udid={udid}
         transport={transport}
-        platform={platform}
         app={browsing}
         onBack={() => setBrowsing(null)}
       />
@@ -931,13 +867,11 @@ function AppsPanel({
 function AppBrowser({
   udid,
   transport,
-  platform,
   app,
   onBack,
 }: {
   udid: string;
   transport: Transport;
-  platform: DevicePlatform;
   app: AppEntry;
   onBack: () => void;
 }) {
@@ -951,7 +885,7 @@ function AppBrowser({
     setLoading(true);
     setError(null);
     api
-      .listAppFiles(udid, transport, platform, app.bundle_id, path)
+      .listAppFiles(udid, transport, app.bundle_id, path)
       .then((list) => {
         if (!cancelled) setEntries(list);
       })
@@ -964,7 +898,7 @@ function AppBrowser({
     return () => {
       cancelled = true;
     };
-  }, [udid, transport, platform, app.bundle_id, path]);
+  }, [udid, transport, app.bundle_id, path]);
 
   const openDir = (p: string) => setPath(p);
   const up = () => {
@@ -981,7 +915,6 @@ function AppBrowser({
       await api.pullAppFile(
         udid,
         transport,
-        platform,
         app.bundle_id,
         entry.path,
         local,
@@ -998,22 +931,9 @@ function AppBrowser({
       if (typeof picked !== "string") return;
       const name = picked.split(/[\\/]/).pop() ?? "upload";
       const remote = path.endsWith("/") ? `${path}${name}` : `${path}/${name}`;
-      await api.pushAppFile(
-        udid,
-        transport,
-        platform,
-        app.bundle_id,
-        picked,
-        remote,
-      );
+      await api.pushAppFile(udid, transport, app.bundle_id, picked, remote);
       // refresh listing
-      const list = await api.listAppFiles(
-        udid,
-        transport,
-        platform,
-        app.bundle_id,
-        path,
-      );
+      const list = await api.listAppFiles(udid, transport, app.bundle_id, path);
       setEntries(list);
       alert(`Uploaded → ${remote}`);
     } catch (e) {
@@ -1255,11 +1175,9 @@ function SettingsPanel({
 function DiagnosticsPanel({
   udid,
   transport,
-  platform,
 }: {
   udid: string | null;
   transport: Transport | null;
-  platform: DevicePlatform | null;
 }) {
   const [reports, setReports] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1311,7 +1229,6 @@ function DiagnosticsPanel({
 
       {error && <div className="error">{error}</div>}
 
-      {platform === "ios" && (
       <div className="card">
         <div className="row">
           <button
@@ -1350,9 +1267,8 @@ function DiagnosticsPanel({
           )}
         </div>
       </div>
-      )}
 
-      {platform === "ios" && reports.length > 0 && (
+      {reports.length > 0 && (
         <div className="card">
           <div
             style={{
@@ -1372,26 +1288,8 @@ function DiagnosticsPanel({
         </div>
       )}
 
-      {platform === "ios" && (
-        <>
-          <BackupCard udid={udid} transport={transport} />
-          <SysdiagnoseCard udid={udid} transport={transport} />
-        </>
-      )}
-      {platform === "android" && (
-        <div className="card">
-          <h2>Android diagnostics</h2>
-          <p
-            className="sub"
-            style={{ marginTop: -4, fontSize: 12 }}
-          >
-            Backups and sysdiagnose are iOS-only services. For an Android
-            bug-report bundle, run{" "}
-            <code>adb -s {udid ?? "SERIAL"} bugreport bugreport.zip</code> in
-            a terminal.
-          </p>
-        </div>
-      )}
+      <BackupCard udid={udid} transport={transport} />
+      <SysdiagnoseCard udid={udid} transport={transport} />
     </>
   );
 }
@@ -1520,11 +1418,9 @@ function BackupCard({
 function NotificationsPanel({
   udid,
   transport,
-  platform,
 }: {
   udid: string | null;
   transport: Transport | null;
-  platform: DevicePlatform | null;
 }) {
   const [running, setRunning] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
@@ -1557,10 +1453,10 @@ function NotificationsPanel({
   }, [lines]);
 
   const start = async () => {
-    if (!udid || !transport || !platform) return;
+    if (!udid || !transport) return;
     setError(null);
     try {
-      await api.startNotifications(udid, transport, platform);
+      await api.startNotifications(udid, transport);
       setRunning(true);
     } catch (e) {
       setError(String(e));
@@ -1598,7 +1494,7 @@ function NotificationsPanel({
           <button
             className="btn"
             onClick={start}
-            disabled={!udid || !transport || !platform || running}
+            disabled={!udid || !transport || running}
           >
             {running ? "Streaming" : "Start"}
           </button>

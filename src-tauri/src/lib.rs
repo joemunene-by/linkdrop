@@ -1,6 +1,5 @@
 //! linkdrop backend — Tauri commands that wrap libimobiledevice + uxplay.
 
-mod adb;
 mod airplay;
 mod apps;
 mod ddi;
@@ -10,7 +9,6 @@ mod error;
 mod muxd;
 mod notifications;
 mod photos;
-mod platform;
 mod pmd3;
 mod screenshot;
 mod wifi_sync;
