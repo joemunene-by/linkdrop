@@ -29,9 +29,12 @@ Usage:
 """
 
 import asyncio
+import contextlib
+import io
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 from pymobiledevice3.lockdown import create_using_usbmux, get_mobdev2_lockdowns
@@ -48,32 +51,57 @@ from pymobiledevice3.services.mobile_image_mounter import (
 from pymobiledevice3.services.screenshot import ScreenshotService
 
 
-LIST_TIMEOUT = 1.5  # keep short — called from list_devices on a 5 s UI poll
-INFO_TIMEOUT = 4.0
+LIST_TIMEOUT = 2.0  # short — browse runs on every cmd_list
+INFO_TIMEOUT = 6.0  # longer — cmd_list's cache is usually a miss, browse must succeed
+
+# Daemon-mode session cache: udid → pair-verified lockdown client. Kept
+# open across calls so repeated ops (info, apps, screenshot, ...) reuse
+# one TLS handshake instead of reconnecting each time. One-shot CLI mode
+# bypasses this (fresh Python interpreter per call) so there's no state
+# leak when running pmd3_helper.py as a subprocess.
+_LOCKDOWN_CACHE: dict = {}
 
 
 async def first_lockdown(udid: str):
     """Return a pair-verified lockdown client for `udid`.
 
-    Tries USB (usbmuxd on Linux, Apple Mobile Device Service on Windows,
-    built-in daemon on macOS) first; falls back to Wi-Fi via mDNS if USB
-    doesn't see the device. Works uniformly on Linux, macOS, and Windows.
+    Cache hit → quick health check + return; cache miss → try USB, then
+    Wi-Fi via mDNS; stash the result before returning.
     """
+    cached = _LOCKDOWN_CACHE.get(udid)
+    if cached is not None:
+        try:
+            # Cheap liveness probe — any already-session'd value works.
+            await cached.get_value(key="ProductVersion")
+            return cached
+        except Exception:
+            _LOCKDOWN_CACHE.pop(udid, None)
+
     # USB path — fastest when the cable is plugged in.
     try:
-        return await create_using_usbmux(serial=udid)
+        client = await create_using_usbmux(serial=udid)
+        _LOCKDOWN_CACHE[udid] = client
+        return client
     except Exception:
         pass
+
     # Wi-Fi path via Bonjour.
     async for _, lockdown in get_mobdev2_lockdowns(
         udid=udid, only_paired=True, timeout=INFO_TIMEOUT
     ):
+        _LOCKDOWN_CACHE[udid] = lockdown
         return lockdown
+
     raise SystemExit(f"device {udid} not found on USB or Wi-Fi")
 
 
 async def cmd_list() -> None:
-    """Emit [{udid, transport}, ...] — USB first, Wi-Fi second, dedup'd."""
+    """Emit [{udid, transport}, ...] — USB first, Wi-Fi second, dedup'd.
+
+    In daemon mode, Wi-Fi lockdown clients are stashed in
+    `_LOCKDOWN_CACHE` so subsequent ops (info, apps, screenshot, ...)
+    skip the Bonjour browse entirely.
+    """
     out: list[dict] = []
     seen: set[str] = set()
 
@@ -87,7 +115,7 @@ async def cmd_list() -> None:
     except Exception:
         pass
 
-    # Wi-Fi via mDNS
+    # Wi-Fi via mDNS — keep the returned lockdown clients cached per UDID.
     try:
         async for ident, lockdown in get_mobdev2_lockdowns(
             only_paired=True, timeout=LIST_TIMEOUT
@@ -100,10 +128,14 @@ async def cmd_list() -> None:
             if udid and udid not in seen:
                 seen.add(udid)
                 out.append({"udid": udid, "transport": "wifi"})
-            try:
-                await lockdown.close()
-            except Exception:
-                pass
+            # Stash if we don't already have one; otherwise close the fresh one.
+            if udid and udid not in _LOCKDOWN_CACHE:
+                _LOCKDOWN_CACHE[udid] = lockdown
+            else:
+                try:
+                    await lockdown.close()
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -398,11 +430,104 @@ async def cmd_screenshot(udid: str, output_path: str) -> None:
     print(json.dumps({"path": output_path, "bytes": len(data)}))
 
 
+DAEMON_HANDLERS = {
+    "list":         ("cmd_list", 0, False),
+    "info":         ("cmd_info", 1, True),
+    "wifi-enable":  ("cmd_wifi_enable", 1, True),
+    "apps":         ("cmd_apps", 1, True),
+    "mount-ddi":    ("cmd_mount_ddi", 1, True),
+    "screenshot":   ("cmd_screenshot", 2, True),
+    "list-photos":  ("cmd_list_photos", 2, True),  # udid, limit (int)
+    "pull-photo":   ("cmd_pull_photo", 3, True),
+    "list-app-files":("cmd_list_app_files", 3, True),
+    "pull-app-file":("cmd_pull_app_file", 4, True),
+    "push-app-file":("cmd_push_app_file", 4, True),
+    "crash-list":   ("cmd_crash_list", 1, True),
+    "crash-pull":   ("cmd_crash_pull", 2, True),
+    "install-app":  ("cmd_install_app", 2, True),
+    "uninstall-app":("cmd_uninstall_app", 2, True),
+    "backup":       ("cmd_backup", 2, True),
+    "sysdiagnose":  ("cmd_sysdiagnose", 2, True),
+}
+
+
+def _send(msg: dict) -> None:
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def run_daemon() -> int:
+    """Long-running mode: one JSON-per-line request, one JSON response.
+
+    Request:  {"id": <any>, "op": "info", "args": ["<udid>"]}
+    Response: {"id": <same>, "ok": true, "data": <value>}
+           or {"id": <same>, "ok": false, "error": "<msg>"}
+
+    Python imports and lockdown sessions stay warm across requests, so
+    per-call latency drops from the subprocess-cold-start ~1s to ~0.1s
+    for cached flows.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # Heartbeat-like banner so Rust knows the daemon is ready.
+    _send({"ok": True, "event": "ready", "pid": os.getpid()})
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            rid = None
+            try:
+                req = json.loads(line)
+                rid = req.get("id")
+                op = req["op"]
+                args = req.get("args", [])
+                entry = DAEMON_HANDLERS.get(op)
+                if entry is None:
+                    _send({"id": rid, "ok": False, "error": f"unknown op: {op}"})
+                    continue
+                fn_name, nargs, _needs_udid = entry
+                if nargs and len(args) < nargs:
+                    _send({
+                        "id": rid,
+                        "ok": False,
+                        "error": f"{op} expects {nargs} arg(s), got {len(args)}",
+                    })
+                    continue
+                # list-photos has an int limit
+                if op == "list-photos" and len(args) >= 2:
+                    try:
+                        args = [args[0], int(args[1])]
+                    except Exception:
+                        args = [args[0], 200]
+                fn = globals()[fn_name]
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    loop.run_until_complete(fn(*args[:nargs]))
+                raw = buf.getvalue().strip()
+                data = json.loads(raw) if raw else None
+                _send({"id": rid, "ok": True, "data": data})
+            except SystemExit as e:
+                _send({"id": rid, "ok": False, "error": str(e)})
+            except Exception as e:
+                _send({
+                    "id": rid,
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "trace": traceback.format_exc(),
+                })
+    finally:
+        loop.close()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: pmd3_helper.py <list|info|wifi-enable> [<udid>]", file=sys.stderr)
+        print("usage: pmd3_helper.py <daemon|list|info|wifi-enable|...> [args...]", file=sys.stderr)
         return 2
     op = argv[1]
+    if op == "daemon":
+        return run_daemon()
     udid = argv[2] if len(argv) >= 3 else ""
     if op == "list":
         asyncio.run(cmd_list())
