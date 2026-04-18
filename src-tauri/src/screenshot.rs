@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::error::{LinkdropError, Result};
 use crate::muxd::{muxd_command, Transport};
+use crate::platform::DevicePlatform;
 
 #[derive(Debug, Serialize)]
 pub struct ScreenshotResult {
@@ -17,6 +18,7 @@ pub struct ScreenshotResult {
 pub fn take_screenshot(
     udid: String,
     transport: Transport,
+    platform: DevicePlatform,
     output_dir: String,
 ) -> Result<ScreenshotResult> {
     let dir = PathBuf::from(&output_dir);
@@ -28,13 +30,21 @@ pub fn take_screenshot(
         chrono_like_timestamp()
     );
     let out_path = dir.join(&filename);
+    let path_str = out_path.to_string_lossy().into_owned();
 
+    // Android: adb exec-out screencap -p > path.png
+    if platform == DevicePlatform::Android {
+        crate::adb::screenshot(&udid, &path_str)?;
+        return Ok(ScreenshotResult { path: out_path });
+    }
+
+    // iOS Wi-Fi: pmd3 ScreenshotService (auto-mounts DDI)
     if transport == Transport::Wifi {
-        let path_str = out_path.to_string_lossy().into_owned();
         crate::pmd3::run_with_args("screenshot", &[&udid, &path_str])?;
         return Ok(ScreenshotResult { path: out_path });
     }
 
+    // iOS USB: idevicescreenshot (needs DDI mounted via ideviceimagemounter)
     let result = muxd_command("idevicescreenshot", transport)
         .args(["-u", &udid, out_path.to_str().unwrap_or("screenshot.png")])
         .output();

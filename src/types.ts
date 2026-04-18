@@ -1,17 +1,20 @@
 export type Transport = "usb" | "wifi";
+export type DevicePlatform = "ios" | "android";
 
 export interface DeviceSummary {
   udid: string;
   transport: Transport;
+  platform: DevicePlatform;
 }
 
 export interface DeviceInfo {
   udid: string;
   transport: Transport;
+  platform: DevicePlatform;
   name: string;
   model: string;
   product_type: string;
-  ios_version: string;
+  ios_version: string; // also used for Android version (UI relabels)
   serial: string;
   battery_percent: number | null;
   total_bytes: number | null;

@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::{LinkdropError, Result};
 use crate::muxd::{muxd_command, Transport};
+use crate::platform::DevicePlatform;
 
 const EVENT_NAME: &str = "syslog";
 
@@ -23,17 +24,24 @@ pub fn start_notifications(
     state: State<NotificationsState>,
     udid: String,
     transport: Transport,
+    platform: DevicePlatform,
 ) -> Result<()> {
     let mut guard = state.0.lock().expect("NotificationsState poisoned");
     if guard.is_some() {
         return Ok(());
     }
 
-    let mut cmd = muxd_command("idevicesyslog", transport);
-    if transport == Transport::Wifi {
-        cmd.arg("-n");
-    }
-    cmd.args(["-u", &udid]);
+    let mut cmd = match platform {
+        DevicePlatform::Android => crate::adb::logcat_command(&udid),
+        DevicePlatform::Ios => {
+            let mut c = muxd_command("idevicesyslog", transport);
+            if transport == Transport::Wifi {
+                c.arg("-n");
+            }
+            c.args(["-u", &udid]);
+            c
+        }
+    };
 
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -41,7 +49,15 @@ pub fn start_notifications(
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                LinkdropError::MissingTool("idevicesyslog", "libimobiledevice-utils")
+                match platform {
+                    DevicePlatform::Android => {
+                        LinkdropError::MissingTool("adb", "android-tools (adb)")
+                    }
+                    DevicePlatform::Ios => LinkdropError::MissingTool(
+                        "idevicesyslog",
+                        "libimobiledevice-utils",
+                    ),
+                }
             } else {
                 e.into()
             }
