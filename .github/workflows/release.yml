@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload artifacts (Linux)
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linkdrop-linux-x64
           path: |
@@ -104,7 +104,7 @@ jobs:
 
       - name: Upload artifacts (macOS)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linkdrop-macos-${{ matrix.platform.target }}
           path: |
@@ -114,7 +114,7 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linkdrop-windows-x64
           path: |
